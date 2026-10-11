@@ -1,4 +1,5 @@
 #include "Bridge.h"
+#include "FolderTransfer.h"
 #include "ShellTransfer.h"
 #include <shobjidl.h>
 #include <shlobj.h>
@@ -48,7 +49,7 @@ void CheckCommand(IExplorerCommand* command,const Paths& paths,const std::filesy
     Require(SUCCEEDED(command->GetIcon(items,&icon)) && std::wstring(icon).ends_with(L",-101"),"Menu icon"); CoTaskMemFree(icon);
     EXPCMDSTATE state; Require(SUCCEEDED(command->GetState(items,FALSE,&state)) && state==ECS_ENABLED,"Multi-file state"); items->Release();
     items=Selection(Paths{paths.front(),folder});
-    Require(SUCCEEDED(command->GetState(items,FALSE,&state)) && state==ECS_HIDDEN,"Mixed folder selection hidden"); items->Release();
+    Require(SUCCEEDED(command->GetState(items,FALSE,&state)) && state==ECS_ENABLED,"Mixed folder selection enabled"); items->Release();
     auto archive=folder/L"中文 archive.zip";
     items=Selection(Paths{archive});
     SFGAOF attributes=0;
@@ -58,7 +59,7 @@ void CheckCommand(IExplorerCommand* command,const Paths& paths,const std::filesy
     items=Selection(Paths{paths.front(),archive});
     Require(SUCCEEDED(command->GetState(items,FALSE,&state)) && state==ECS_ENABLED,"ZIP and ordinary file state"); items->Release();
     items=Selection(Paths{archive,folder/L"folder.zip"});
-    Require(SUCCEEDED(command->GetState(items,FALSE,&state)) && state==ECS_HIDDEN,"ZIP with real directory hidden"); items->Release();
+    Require(SUCCEEDED(command->GetState(items,FALSE,&state)) && state==ECS_ENABLED,"ZIP with real directory enabled"); items->Release();
     GUID id{}; Require(SUCCEEDED(command->GetCanonicalName(&id)) && id==CommandId,"Canonical command ID");
 }
 IExplorerCommand* RegisteredCommand() {
@@ -119,7 +120,7 @@ std::unique_ptr<bridge::Channel> Pair(HWND window) {
     Require(socket!=INVALID_SOCKET,"Connect test peer"); DWORD timeout=10000; setsockopt(socket,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<char*>(&timeout),sizeof(timeout));
     bridge::Bytes hello(20); int done=0; while(done<20) { auto n=recv(socket,reinterpret_cast<char*>(hello.data()+done),20-done,0); Require(n>0,"Server greeting"); done+=n; }
     auto channel=std::make_unique<bridge::Channel>(socket,code,bridge::Bytes(hello.begin()+4,hello.end()),false);
-    channel->Send(1,bridge::Bytes{'S','h','e','l','l',' ','t','e','s','t'}); Require(channel->Receive().first==1,"Handshake"); return channel;
+    std::string peer="Shell test\nLB-FOLDER1"; channel->Send(1,bridge::Bytes(peer.begin(),peer.end())); Require(channel->Receive().first==1,"Handshake"); return channel;
 }
 std::pair<std::wstring,bridge::Bytes> ReceiveFile(bridge::Channel& channel) {
     bridge::Bytes bytes; std::wstring name; uint64_t size=0;
@@ -138,6 +139,15 @@ std::pair<std::wstring,bridge::Bytes> ReceiveFile(bridge::Channel& channel) {
             Require(result==0 && hash==data,"File SHA-256"); return {name,bytes};
         } else Require(false,"Unexpected frame");
     }
+}
+void CheckFolderInvoke(IExplorerCommand* command,bridge::Channel& channel,const std::filesystem::path& temporary) {
+    auto folder=temporary/L"right-click-folder"; std::filesystem::create_directories(folder/L"nested"/L"empty"); std::ofstream(folder/L"nested"/L"content.txt",std::ios::binary)<<"folder payload";
+    auto* items=Selection(Paths{folder}); Require(SUCCEEDED(command->Invoke(items,nullptr)),"Folder menu Invoke"); items->Release();
+    auto [type,data]=channel.Receive(); Require(type==9,"Folder menu sends folder transaction"); auto header=bridge::folders::DecodeHeader(data); channel.Send(14,bridge::folders::Reply(header.id,true));
+    bridge::folders::Receiver receiver(temporary,header);
+    std::filesystem::path result;
+    while(true) { auto [t,b]=channel.Receive(); if(t==12) {result=receiver.Commit(); channel.Send(15,bridge::folders::Reply(header.id,true)); break;} receiver.Consume(t,b); }
+    Require(std::filesystem::is_directory(result/L"nested"/L"empty"),"Folder menu preserves empty directory"); std::ifstream file(result/L"nested"/L"content.txt",std::ios::binary); std::string content((std::istreambuf_iterator<char>(file)),{}); Require(content=="folder payload","Folder menu file content");
 }
 int wmain(int argc,wchar_t** argv) {
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED); WSADATA winsock{}; WSAStartup(MAKEWORD(2,2),&winsock);
@@ -182,6 +192,7 @@ int wmain(int argc,wchar_t** argv) {
             auto first=ReceiveFile(*channel),second=ReceiveFile(*channel);
             Require(first.first==a.filename() && std::string(first.second.begin(),first.second.end())=="first payload","Registered first file bytes");
             Require(second.first==b.filename() && std::string(second.second.begin(),second.second.end())=="second payload","Registered second file bytes");
+            CheckFolderInvoke(command,*channel,temporary.path);
             command->Release(); command=nullptr; Sleep(1000); Alive(app); Heartbeat(*channel); channel->Close();
             std::cout<<"PASS: 30 installed COM menu activations while paired; original process and encrypted connection survived; registered multi-file Invoke verified by SHA-256; clipboard untouched"<<std::endl;
             WSACleanup(); CoUninitialize(); return 0;
@@ -211,10 +222,10 @@ int wmain(int argc,wchar_t** argv) {
             items=Selection(paths); Require(SUCCEEDED(command->Invoke(items,nullptr)),"Connected multi-file Invoke"); items->Release();
             first=ReceiveFile(*channel); second=ReceiveFile(*channel);
             Require(first.first==a.filename() && second.first==b.filename(),"Connected multi-file transfer");
-            channel->Close();
+            CheckFolderInvoke(command,*channel,temporary.path); channel->Close();
         }
         command->Release(); if(library) FreeLibrary(library);
-        std::cout<<(registered || selectionOnly?"PASS: shell menu title, icon, multi-file and ZIP state; real directories hidden; running app and clipboard untouched":"PASS: shell command, malformed IPC rejection, cold share queue, warm single-instance forwarding, Unicode and multi-file transfers with SHA-256; clipboard untouched")<<std::endl;
+        std::cout<<(registered || selectionOnly?"PASS: shell menu title, icon, mixed file/folder and ZIP state; running app and clipboard untouched":"PASS: shell command, malformed IPC rejection, cold share queue, warm single-instance forwarding, Unicode files and folder Invoke with SHA-256; clipboard untouched")<<std::endl;
         WSACleanup(); CoUninitialize(); return 0;
     } catch(const std::exception& error) { std::cerr<<"FAIL: "<<error.what()<<std::endl; WSACleanup(); CoUninitialize(); return 1; }
 }

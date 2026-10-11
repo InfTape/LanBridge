@@ -84,7 +84,7 @@ try {
     [LanBridgeShellRefresh]::SHChangeNotify(0x08000000,0,[IntPtr]::Zero,[IntPtr]::Zero)
     if ($Action -eq 'Enable') {
         if ($alreadyRegistered) { Finish-Result '右键发送已启用，无需重复注册。' 0 }
-        Finish-Result '已启用：右键文件 → 发送到手机。菜单未刷新时，关闭并重新打开资源管理器窗口。' 0
+        Finish-Result '已启用：右键文件或文件夹 → 发送到手机。菜单未刷新时，关闭并重新打开资源管理器窗口。' 0
     }
     else { Finish-Result '已移除右键发送菜单及本组件添加的证书信任。' 0 }
 } catch {

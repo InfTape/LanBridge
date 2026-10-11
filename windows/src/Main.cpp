@@ -11,6 +11,8 @@
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <objbase.h>
+#include <shobjidl.h>
+#include <wrl/client.h>
 #include <windowsx.h>
 #include <algorithm>
 #include <deque>
@@ -21,7 +23,7 @@
 namespace {
 constexpr UINT EventsMessage=WM_APP+1,TrayMessage=WM_APP+2;
 const UINT TaskbarCreatedMessage=RegisterWindowMessageW(L"TaskbarCreated");
-enum ControlId { Ip=100,Code,CopyLink,Disconnect,Text,SendText,SendClipboard,SendFile,OpenFolder,History,Recopy,Clear,Progress,Status,EnableMenu,DisableMenu,Startup,ResetPairing,Qr=200,Exit=900 };
+enum ControlId { Ip=100,Code,CopyLink,Disconnect,Text,SendText,SendClipboard,SendFile,OpenFolder,History,Recopy,Clear,Progress,Status,EnableMenu,DisableMenu,Startup,ResetPairing,SendFolder,Qr=200,Exit=900 };
 struct Record { bool file; std::wstring text; std::filesystem::path path; };
 class App {
     HWND window_=nullptr;
@@ -121,7 +123,8 @@ private:
         Control(L"BUTTON",L"发送文本",SendText,WS_TABSTOP);
         Control(L"BUTTON",L"发送剪贴板",SendClipboard,WS_TABSTOP);
         Control(L"BUTTON",L"选择文件…",SendFile,WS_TABSTOP);
-        Control(L"STATIC",L"支持拖入多个文件；文件夹请先压缩。",17);
+        Control(L"BUTTON",L"选择文件夹…",SendFolder,WS_TABSTOP);
+        Control(L"STATIC",L"支持文件、文件夹及混合拖入；保留目录结构与空文件夹。",17);
         Control(L"STATIC",L"03   最近收到",18);
         Control(L"STATIC",L"接收完成后自动复制到剪贴板，可直接 Ctrl + V。",19);
         Control(L"LISTBOX",L"",History,WS_TABSTOP|WS_VSCROLL|LBS_NOINTEGRALHEIGHT|LBS_NOTIFY,WS_EX_CLIENTEDGE);
@@ -150,9 +153,9 @@ private:
         Place(13,40,afterQr+42,80,25); Place(Ip,124,afterQr+38,162,240);
         Place(14,40,afterQr+78,246,25); Place(Code,40,afterQr+107,246,31);
         Place(CopyLink,40,afterQr+151,246,33); Place(Disconnect,40,afterQr+194,117,33); Place(ResetPairing,169,afterQr+194,117,33);
-        Place(16,324,111,right,28); Place(Text,324,151,editor,123);
-        Place(SendText,w-230,151,190,32); Place(SendClipboard,w-230,193,190,32); Place(SendFile,w-230,235,190,32);
-        Place(17,324,289,right,25);
+        Place(16,324,111,right,28); Place(Text,324,151,editor,149);
+        Place(SendText,w-230,151,190,32); Place(SendClipboard,w-230,190,190,32); Place(SendFile,w-230,229,190,32); Place(SendFolder,w-230,268,190,32);
+        Place(17,324,307,right,20);
         Place(18,324,354,right,28); Place(19,324,394,right,26);
         Place(History,324,430,editor,std::max(75,h-494)); Place(Recopy,w-230,430,190,32); Place(OpenFolder,w-230,468,190,32); Place(Clear,w-230,506,190,32);
         Place(Progress,32,h-49,w-64,8); Place(Status,32,h-33,w-64,26);
@@ -192,7 +195,7 @@ private:
         if(sending_.exchange(true)) { StatusText(L"当前发送尚未结束，请稍候"); return; }
         if(!server_->IsConnected()) { sending_=false; StatusText(L"请先在 Android 端连接电脑"); return; }
         if(sender_.joinable()) sender_.join();
-        for(int id:{SendText,SendClipboard,SendFile}) EnableWindow(Item(id),FALSE);
+        for(int id:{SendText,SendClipboard,SendFile,SendFolder}) EnableWindow(Item(id),FALSE);
         sender_=std::thread([this,work] {
             try { work(); } catch(const std::exception& e) { Queue({bridge::Event::Error,bridge::Wide(e.what())}); }
             sending_=false; Queue({bridge::Event::Info,L""});
@@ -260,8 +263,23 @@ private:
         if(!*p) paths.push_back(first); else while(*p) { paths.push_back(first/p); p+=wcslen(p)+1; }
         Files(paths);
     }
+    void SelectFolder() {
+        Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
+        if(FAILED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog)))) { StatusText(L"无法打开文件夹选择器"); return; }
+        DWORD flags=0; dialog->GetOptions(&flags); dialog->SetOptions(flags|FOS_PICKFOLDERS|FOS_ALLOWMULTISELECT|FOS_PATHMUSTEXIST|FOS_NOCHANGEDIR);
+        dialog->SetTitle(L"选择要发送到手机的文件夹");
+        if(FAILED(dialog->Show(window_))) return;
+        Microsoft::WRL::ComPtr<IShellItemArray> items; if(FAILED(dialog->GetResults(&items))) return;
+        DWORD count=0; items->GetCount(&count); shelltransfer::Paths paths;
+        for(DWORD i=0;i<count;++i) {
+            Microsoft::WRL::ComPtr<IShellItem> item; if(FAILED(items->GetItemAt(i,&item))) continue;
+            PWSTR path=nullptr; if(SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH,&path))) { paths.emplace_back(path); CoTaskMemFree(path); }
+        }
+        Files(paths);
+    }
     void RecordReceived(Record record) {
-        auto label=record.file ? L"文件  ·  "+record.path.filename().wstring() : L"文本  ·  "+record.text.substr(0,100);
+        auto attributes=record.file?GetFileAttributesW(record.path.c_str()):INVALID_FILE_ATTRIBUTES;
+        auto label=record.file ? std::wstring(attributes!=INVALID_FILE_ATTRIBUTES && (attributes&FILE_ATTRIBUTE_DIRECTORY)?L"文件夹  ·  ":L"文件  ·  ")+record.path.filename().wstring() : L"文本  ·  "+record.text.substr(0,100);
         for(auto& c:label) if(c==L'\n' || c==L'\r' || c==L'\t') c=L' ';
         records_.push_front(std::move(record)); SendMessageW(Item(History),LB_INSERTSTRING,0,reinterpret_cast<LPARAM>(label.c_str()));
         while(records_.size()>80) { records_.pop_back(); SendMessageW(Item(History),LB_DELETESTRING,80,0); }
@@ -276,14 +294,18 @@ private:
                 StatusText(ok?L"收到文本 · 已自动复制到剪贴板":L"收到文本 · 剪贴板暂时被占用，请点重新复制");
                 server_->Acknowledge(ok?L"Windows 已接收文本并复制到剪贴板":L"Windows 已接收文本，剪贴板占用"); break;
             }
+            case bridge::Event::Folder:
             case bridge::Event::File: {
                 receiving_=false;
+                if(e.path.empty()) { StatusText(e.message); break; }
                 bool ok=bridge::CopyFiles(window_,{e.path}); RecordReceived({true,L"",e.path});
                 StatusText(ok?L"收到 "+e.message+L" · 已复制到文件剪贴板":L"文件已保存 · 剪贴板暂时被占用，请点重新复制");
                 server_->Acknowledge(ok?L"Windows 已保存并复制文件："+e.message:L"Windows 已保存文件，剪贴板占用"); break;
             }
+            case bridge::Event::FolderProgress:
             case bridge::Event::Progress: {
-                if(e.message.starts_with(L"接收")) receiving_=e.current<e.total;
+                if(e.kind==bridge::Event::FolderProgress) receiving_=true;
+                else if(e.message.starts_with(L"接收")) receiving_=e.current<e.total;
                 int n=e.total ? static_cast<int>(e.current*100/e.total) : 100;
                 SendMessageW(Item(Progress),PBM_SETPOS,n,0);
                 StatusText(e.message+L" · "+std::to_wstring(n)+L"%  ("+std::to_wstring(e.current/1024)+L" / "+std::to_wstring(e.total/1024)+L" KiB)"); break;
@@ -292,7 +314,7 @@ private:
             default: if(!e.message.empty()) StatusText(e.message); break;
             }
         }
-        for(int id:{SendText,SendClipboard,SendFile}) EnableWindow(Item(id),!sending_);
+        for(int id:{SendText,SendClipboard,SendFile,SendFolder}) EnableWindow(Item(id),!sending_);
         for(int id:{EnableMenu,DisableMenu}) EnableWindow(Item(id),!integrating_);
         PumpFiles();
     }
@@ -333,6 +355,7 @@ private:
             if(!files.empty()) Files(files); else { auto text=bridge::ReadText(window_); Send([this,text] { server_->SendText(text); }); } break;
         }
         case SendFile: SelectFiles(); break;
+        case SendFolder: SelectFolder(); break;
         case OpenFolder: ShellExecuteW(window_,L"open",folder_.c_str(),nullptr,nullptr,SW_SHOWNORMAL); break;
         case Clear: records_.clear(); SendMessageW(Item(History),LB_RESETCONTENT,0,0); break;
         case Recopy: {
@@ -389,7 +412,7 @@ private:
         }
         case WM_DROPFILES: {
             auto drop=reinterpret_cast<HDROP>(w); auto n=DragQueryFileW(drop,0xffffffff,nullptr,0); std::vector<std::filesystem::path> paths;
-            for(UINT i=0;i<n;i++) { std::wstring p(DragQueryFileW(drop,i,nullptr,0)+1,L'\0'); DragQueryFileW(drop,i,p.data(),static_cast<UINT>(p.size())); p.pop_back(); if(std::filesystem::is_regular_file(p)) paths.emplace_back(p); }
+            for(UINT i=0;i<n;i++) { std::wstring p(DragQueryFileW(drop,i,nullptr,0)+1,L'\0'); DragQueryFileW(drop,i,p.data(),static_cast<UINT>(p.size())); p.pop_back(); paths.emplace_back(p); }
             DragFinish(drop); app->Files(paths); return 0;
         }
         case TrayMessage: {

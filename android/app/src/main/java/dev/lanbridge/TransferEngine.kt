@@ -25,7 +25,7 @@ import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicLong
 
 class BridgeApplication : Application() { val engine by lazy { TransferEngine(this) } }
-data class Received(val name: String, val text: String? = null, val uri: Uri? = null, val size: Long = 0)
+data class Received(val name: String, val text: String? = null, val uri: Uri? = null, val size: Long = 0, val directory: Boolean = false)
 data class TransferState(
     val connected: Boolean = false, val connecting: Boolean = false, val remembered: Boolean = false,
     val sending: Boolean = false, val pendingShares: Int = 0, val status: String = "准备连接电脑",
@@ -56,6 +56,10 @@ class TransferEngine(private val app: Application) {
     private var foregroundStartId = 0
     private val savedPairing = RememberedPairing(app)
     private val discovery = PairingDiscovery(app)
+    private val folders = AndroidFolders(app)
+    @Volatile private var peerFolders = false
+    private data class FolderWait(val id: Long, val phase: Int, val result: CompletableDeferred<FolderProtocol.Reply>)
+    @Volatile private var folderWait: FolderWait? = null
     @Volatile private var trustedPairing = runCatching { savedPairing.load() }.getOrNull()
     @Volatile private var paused = false
     @Volatile private var sendDisconnectReason: Pair<Long,String>? = null
@@ -151,9 +155,10 @@ class TransferEngine(private val app: Application) {
                     local.connect(InetSocketAddress(pairing.host, pairing.port), 3000)
                     local.soTimeout = 10000; local.tcpNoDelay = true
                     channel = Wire(local, pairing.code)
-                    channel.send(1, "${Build.MANUFACTURER} ${Build.MODEL}".toByteArray(Charsets.UTF_8))
+                    channel.send(1, "${Build.MANUFACTURER} ${Build.MODEL}\n${FolderProtocol.CAPABILITY}".toByteArray(Charsets.UTF_8))
                     val (type, data) = channel.receive()
                     require(type == 1 && data.size <= 256) { "电脑握手失败" }
+                    peerFolders = decodeUtf8(data).endsWith("\n${FolderProtocol.CAPABILITY}")
                     local.soTimeout = 45000
                     // Only remember credentials after the encrypted hello proves the computer knows them.
                     synchronized(this@TransferEngine) {
@@ -182,7 +187,8 @@ class TransferEngine(private val app: Application) {
                 } finally {
                     channel?.close(); local?.close()
                     if(generation.get() == id) {
-                        heartbeat?.cancel(); wire = null; socket = null
+                        heartbeat?.cancel(); wire = null; socket = null; peerFolders = false
+                        folderWait?.result?.cancel(); folderWait = null
                         sendJob?.cancelAndJoin()
                         mutable.update { it.copy(connected = false, connecting = false, sending = false, progress = null) }
                     }
@@ -204,7 +210,7 @@ class TransferEngine(private val app: Application) {
         }
     }
     @Synchronized fun disconnect(stopService: Boolean = true) {
-        synchronized(this) { generation.incrementAndGet(); serviceStarts.cancel(); pendingConnection = null; if(stopService) paused = true; connectionJob?.cancel(); heartbeat?.cancel(); sendJob?.cancel(); wire?.close(); wire = null; socket?.close(); socket = null }
+        synchronized(this) { generation.incrementAndGet(); serviceStarts.cancel(); pendingConnection = null; if(stopService) paused = true; connectionJob?.cancel(); heartbeat?.cancel(); sendJob?.cancel(); folderWait?.result?.cancel(); folderWait = null; peerFolders = false; wire?.close(); wire = null; socket?.close(); socket = null }
         mutable.update { it.copy(connected = false, connecting = false, sending = false, progress = null, status = if(stopService || it.connected || it.connecting) "已断开连接" else it.status) }
         if(stopService) scope.launch(Dispatchers.Main.immediate) { synchronized(this@TransferEngine) { stopReadyService() } }
     }
@@ -225,9 +231,42 @@ class TransferEngine(private val app: Application) {
     }
     private fun receive(channel: Wire) {
         var pending: PendingFile? = null
+        var folder: FolderReceiver? = null
         try {
             while(true) {
                 val (type, data) = channel.receive()
+                if(type == 14 || type == 15) {
+                    val reply = FolderProtocol.reply(data)
+                    folderWait?.takeIf { it.id == reply.id && it.phase == type }?.result?.complete(reply)
+                    continue
+                }
+                if(type == 9) {
+                    require(pending == null && folder == null)
+                    val header = FolderProtocol.decode(data)
+                    try { folder = folders.receiver(header) }
+                    catch(e: Exception) { channel.send(14,FolderProtocol.reply(header.id,false,(e.message ?: "无法接收文件夹").take(500))); report(e.message ?: "无法接收文件夹"); continue }
+                    channel.send(14,FolderProtocol.reply(header.id,true)); progress("接收文件夹 ${header.name}",0,header.bytes); continue
+                }
+                if(type == 13) {
+                    val active = requireNotNull(folder); require(data.size == 8 && FolderProtocol.id(data) == active.header.id)
+                    active.close(); folder = null; channel.send(15,FolderProtocol.reply(active.header.id,false,"文件夹发送已取消")); report("文件夹传输已取消，未保留不完整目录"); continue
+                }
+                if(type == 12) {
+                    val active = requireNotNull(folder); require(data.size == 8 && FolderProtocol.id(data) == active.header.id)
+                    try {
+                        val uri = Uri.parse(active.commit()); active.close(); folder = null
+                        val name = runCatching { folders.savedName(uri) }.getOrDefault(active.header.name)
+                        mutable.update { it.copy(status = "已保存文件夹：$name", received = (listOf(Received(name,uri = uri,size = active.header.bytes,directory = true)) + it.received).take(80)) }
+                        progress("文件夹接收完成",active.header.bytes,active.header.bytes); channel.send(15,FolderProtocol.reply(active.header.id,true))
+                    } catch(e: Exception) {
+                        active.close(); folder = null; channel.send(15,FolderProtocol.reply(active.header.id,false,(e.message ?: "保存失败").take(500))); report("文件夹保存失败：${e.message}")
+                    }
+                    continue
+                }
+                if(type == 10 || type == 11 || (folder != null && (type == 4 || type == 5))) {
+                    val active = requireNotNull(folder); active.consume(type,data)
+                    progress("接收文件夹 ${active.header.name}",active.done,active.header.bytes); continue
+                }
                 when(type) {
                     2 -> {
                         require(data.isNotEmpty()) { "文本为空" }
@@ -236,7 +275,7 @@ class TransferEngine(private val app: Application) {
                         channel.send(6, "Android 已接收文本".toByteArray())
                     }
                     3 -> {
-                        require(pending == null && data.size >= 10)
+                        require(pending == null && folder == null && data.size >= 10)
                         val buffer = ByteBuffer.wrap(data); val n = buffer.short.toInt() and 65535
                         require(n > 0 && data.size == n+10)
                         val rawName = ByteArray(n).also(buffer::get); val name = safeName(decodeUtf8(rawName))
@@ -274,6 +313,7 @@ class TransferEngine(private val app: Application) {
                 }
             }
         } finally {
+            folder?.close()
             pending?.let { try { it.stream.close() } finally { resolver.delete(it.uri, null, null) } }
         }
     }
@@ -314,8 +354,56 @@ class TransferEngine(private val app: Application) {
         sendTask { it.send(2, data); report("文本已发送 · 等待 Windows 确认") }
     }
     fun sendFiles(uris: List<Uri>) { sendTask { channel -> sendFilesData(channel, uris) } }
+    fun sendFolder(uri: Uri) { sendTask { channel -> sendFolderData(channel,uri) } }
+    fun folderDestination(): Boolean = folders.destination() != null
+    fun setFolderDestination(uri: Uri) {
+        try { folders.setDestination(uri); report("文件夹接收位置已保存，下次无需再次授权") }
+        catch(e: Exception) { report("无法保存接收位置：${e.message}") }
+    }
+    private suspend fun awaitFolderReply(wait: FolderWait) {
+        val reply = withTimeout(30000) { wait.result.await() }
+        if(!reply.accepted) throw LocalFileException(Exception(reply.reason.ifEmpty { "对端拒绝文件夹" }))
+    }
+    private suspend fun sendFolderData(channel: Wire, uri: Uri) {
+        if(!peerFolders) throw LocalFileException(Exception("请先更新 Windows 端至支持文件夹的版本"))
+        val plan = try { report("正在读取文件夹…"); folders.collect(uri) } catch(e: Exception) { if(e is CancellationException) throw e; throw LocalFileException(e) }
+        plan.use {
+            val id = java.security.SecureRandom().nextLong().let { if(it == 0L) 1L else it }
+            val header = FolderProtocol.Header(id,plan.name,plan.entries.count { !it.directory },plan.entries.count { it.directory },plan.bytes)
+            val ready = FolderWait(id,14,CompletableDeferred()); folderWait = ready
+            try {
+                channel.send(9,FolderProtocol.encode(header)); awaitFolderReply(ready)
+                var done = 0L; progress("发送文件夹 ${plan.name}",done,plan.bytes)
+                try {
+                    for(entry in plan.entries) {
+                        currentCoroutineContext().ensureActive()
+                        if(entry.directory) { channel.send(10,entry.relative.toByteArray(Charsets.UTF_8)); continue }
+                        val input = entry.cache?.inputStream() ?: resolver.openInputStream(entry.uri) ?: error("无法读取目录内文件")
+                        input.use { stream ->
+                            channel.send(11,FolderProtocol.fileHeader(entry.relative,entry.size))
+                            val hash = MessageDigest.getInstance("SHA-256"); var fileDone = 0L; val buffer = ByteArray(262144)
+                            while(fileDone < entry.size) {
+                                currentCoroutineContext().ensureActive(); val n = stream.read(buffer,0,minOf(buffer.size.toLong(),entry.size-fileDone).toInt())
+                                require(n > 0) { "目录内文件长度发生变化" }; val chunk = buffer.copyOf(n)
+                                hash.update(chunk); channel.send(4,chunk); fileDone += n; done += n; progress("发送文件夹 ${plan.name}",done,plan.bytes)
+                            }
+                            require(stream.read() == -1) { "目录内文件长度发生变化" }; channel.send(5,hash.digest())
+                        }
+                    }
+                } catch(e: Exception) {
+                    if(e is CancellationException) throw e
+                    channel.send(13,FolderProtocol.id(id))
+                    throw LocalFileException(e)
+                }
+                val complete = FolderWait(id,15,CompletableDeferred()); folderWait = complete
+                channel.send(12,FolderProtocol.id(id)); awaitFolderReply(complete); progress("文件夹发送完成",plan.bytes,plan.bytes)
+            } finally { if(folderWait?.id == id) folderWait = null }
+        }
+    }
     private suspend fun sendFilesData(channel: Wire, uris: List<Uri>) {
         for(uri in uris) {
+            val directory = try { folders.isDirectory(uri) } catch(e: Exception) { throw LocalFileException(e) }
+            if(directory) { sendFolderData(channel,uri); continue }
             var started = false
             try {
             var name = "共享文件"; var size = -1L

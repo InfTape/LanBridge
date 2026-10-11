@@ -1,4 +1,5 @@
 #include "Bridge.h"
+#include "FolderTransfer.h"
 #include <objbase.h>
 #include <ole2.h>
 #include <shellapi.h>
@@ -87,7 +88,7 @@ int wmain(int argc,wchar_t** argv) {
         SOCKET s=::socket(AF_INET,SOCK_STREAM,IPPROTO_TCP); sockaddr_in a{}; a.sin_family=AF_INET; a.sin_addr.s_addr=htonl(INADDR_LOOPBACK); a.sin_port=htons(42831);
         Require(connect(s,reinterpret_cast<sockaddr*>(&a),sizeof(a))==0,"connect"); DWORD timeout=10000; setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<char*>(&timeout),sizeof(timeout));
         Bytes greeting(20); int done=0; while(done<20) { int n=recv(s,reinterpret_cast<char*>(greeting.data()+done),20-done,0); Require(n>0,"greeting"); done+=n; }
-        Channel c(s,code,Bytes(greeting.begin()+4,greeting.end()),false); c.Send(1,Bytes{'U','I',' ','t','e','s','t'}); Require(c.Receive().first==1,"hello");
+        Channel c(s,code,Bytes(greeting.begin()+4,greeting.end()),false); std::string hello="UI test\nLB-FOLDER1"; c.Send(1,Bytes(hello.begin(),hello.end())); Require(c.Receive().first==1,"hello");
         std::wstring expected=L"自动复制验证：中文与 emoji 😀\n第二行"; auto text=Utf8(expected); c.Send(2,Bytes(text.begin(),text.end()));
         for(int i=0;i<100 && ReadText(backup.owner)!=expected;i++) Sleep(50);
         Require(ReadText(backup.owner)==expected,"auto text clipboard"); Require(c.Receive().first==6,"text receipt");
@@ -102,8 +103,16 @@ int wmain(int argc,wchar_t** argv) {
         SendMessageW(GetDlgItem(p.window,104),WM_SETTEXT,0,reinterpret_cast<LPARAM>(L"Windows UI 回传")); SendMessageW(p.window,WM_COMMAND,105,0);
         auto reply=c.Receive(); Require(reply.first==2 && Wide(std::string(reply.second.begin(),reply.second.end()))==L"Windows UI 回传","reverse UI text");
         Require(SendMessageW(GetDlgItem(p.window,109),LB_GETCOUNT,0,0)==2,"history"); SendMessageW(GetDlgItem(p.window,109),LB_SETCURSEL,1,0); SendMessageW(p.window,WM_COMMAND,110,0); Require(ReadText(backup.owner)==expected,"recopy");
+        auto folderName="LanBridge-folder-ui-"+RandomCode();
+        c.Send(9,folders::EncodeHeader({42,folderName,1,1,static_cast<uint64_t>(text.size())})); auto ready=c.Receive(); Require(ready.first==14 && folders::Accepted(ready.second),"folder accepted");
+        c.Send(10,Bytes{'e','m','p','t','y'}); c.Send(11,folders::FileHeader("content.txt",text.size())); c.Send(4,Bytes(text.begin(),text.end())); c.Send(5,digest);
+        auto folderClipboard=ReadFiles(backup.owner); Require(folderClipboard.empty() || folderClipboard.front().filename()!=Wide(folderName),"partial folder copied prematurely");
+        auto end=folders::Reply(42,true); end.resize(8); c.Send(12,end); auto completed=c.Receive(); Require(completed.first==15 && folders::Accepted(completed.second),"folder completed"); Require(c.Receive().first==6,"folder clipboard receipt");
+        folderClipboard=ReadFiles(backup.owner); Require(folderClipboard.size()==1 && folderClipboard.front().filename()==Wide(folderName) && std::filesystem::is_directory(folderClipboard.front()/L"empty"),"whole folder CF_HDROP");
+        Require(SendMessageW(GetDlgItem(p.window,109),LB_GETCOUNT,0,0)==3,"folder history"); SendMessageW(p.window,WM_COMMAND,110,0); Require(ReadFiles(backup.owner)==folderClipboard,"folder recopy");
         if(argc>=3) Snapshot(p.window,argv[2]); c.Close(); SendMessageW(p.window,WM_COMMAND,900,0); p.window=nullptr; WaitForSingleObject(p.pi.hProcess,10000); std::filesystem::remove(files[0]);
-        std::cout<<"PASS: real Win32 UI auto-copies Unicode text and CF_HDROP, sends text, records/recopies history; original clipboard restored"<<std::endl;
+        Require(std::filesystem::equivalent(folderClipboard.front().parent_path(),ReceiveDirectory()) && folderClipboard.front().filename()==Wide(folderName),"folder cleanup boundary"); std::filesystem::remove_all(folderClipboard.front());
+        std::cout<<"PASS: real Win32 UI auto-copies Unicode text, file and completed folder CF_HDROP, sends text, records/recopies history; original clipboard restored"<<std::endl;
     } catch(const ClipboardUnavailable& e) { std::cout<<"SKIP: "<<e.what()<<std::endl; WSACleanup(); CoUninitialize(); return 77;
     } catch(const std::exception& e) { std::cerr<<"FAIL: "<<e.what()<<std::endl; WSACleanup(); CoUninitialize(); return 1; }
     WSACleanup(); CoUninitialize(); return 0;

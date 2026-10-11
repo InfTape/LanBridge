@@ -1,6 +1,22 @@
 # 验证记录
 
-验证日期：2026-10-12。Windows 1.5.0，Android 1.3.1。保留首次扫码绑定与自动重连，本次通过 ADB 抓到 1.3.0 的两段故障：Xiaomi Android 16 拒绝 Network.bindSocket（EPERM），连接立即失败后在前台服务尚未完成启动时 stopService，导致 ForegroundServiceDidNotStartInTimeException。1.3.1 为 TCP/UDP 创建新的默认路由 socket，并以服务前台启动回调协调连接与取消。已更新安装到 2510DRK44C / API 36；用户扫码成功，实际界面显示已记住绑定；强制结束应用后重新启动，新进程自动恢复加密连接，无需扫码。构建、Lint 和 27 项 JVM 测试通过（1 项外部二维码 fixture 用例跳过），包含实际 Windows TCP/UDP 互通。Windows 本次未改动、未重启，原 1.5.0 七项集成测试记录保留。保留截图工具托盘设计、应用图标、统一字体、开机启动及 ZIP/右键断线修复。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
+验证日期：2026-10-12。当前 Windows 1.6.0、Android 1.4.0（versionCode 8），新增双向文件夹传输。Windows 8 项集成测试通过；Android 构建、Lint（0 errors / 19 warnings）及带真实 TCP、UDP、文件夹、二维码 fixture 的 34 项 JVM 测试通过，0 failures、0 skipped。Xiaomi 2510DRK44C / Android 16 真机安装成功，用户完成 SAF 保存目录授权。以下先记录本次文件夹验证，再保留旧版本的历史检查；历史中的“文件夹隐藏”是旧版行为，1.6.0 已改为目录及混合选择可发送。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
+
+| 本次文件夹检查 | 结果 |
+| --- | --- |
+| Windows 全量回归 | 8 项通过：FolderIntegration、PairingIntegration、RememberedDesktopIntegration、StartupIntegration、ShellIntegration、ShellSelectionIntegration、BridgeIntegration、UiIntegration；最后仅调整断线原因展示后再次运行 FolderIntegration / BridgeIntegration，两项通过 |
+| 原生文件夹协议 | 路径穿越、保留名称、重复和大小写冲突拒绝；空根、空子目录、零字节文件、同名根另存、摘要错误及不完整目录清理；加密传输、接收准备拒绝和发送取消后继续心跳；异常终止的子进程目录在下一次恢复清理，仍存活进程的目录不删除 |
+| Android 状态机及跨端 | FolderTransferTest 6 项及 FolderInteropTest 1 项通过，使用生产 Kotlin Wire / FolderReceiver 和真实 Windows TCP 服务；包含中文及 emoji、262145 字节分块边界、空文件和空目录，双向内容与 SHA-256 一致 |
+| Windows 11 已注册菜单 | 1.6.0.0 身份包实际注册；已认证连接下重复激活真实 COM 菜单 30 次，重复启用两次，文件及目录 Invoke 发送成功；主程序保持无包身份，连接心跳正常 |
+| Windows 文件夹剪贴板 | UiIntegration 验证完整提交前不发布目录，完成后一次写入根目录 CF_HDROP、一次历史记录及重新复制；结束恢复原剪贴板 |
+| Android SAF 真机接收 | 用户授权本地“下载/LanBridge”，Windows 正式程序原生发送请求传入 LanBridge-folder-test；实际接收中文文件、零字节文件及 nested/empty 空目录，手机界面显示完整接收；再次发送另存为 LanBridge-folder-test (1)，原目录保留 |
+| Android SAF 真机发送 | 以具有已持久授权的子目录 URI 向正式应用发送 ACTION_SEND，自动传回 Windows；只发送指定子目录，没有扩大到授权根目录。目录结构及 SHA-256 一致；再次分享在 Windows 另存为 (1)，两份原内容均保留 |
+| 真机自动复制 | 原生检查 CF_HDROP 为本次接收的完整根目录；两次目录接收均成功。每次检查前备份、结束恢复原剪贴板 |
+| 真机记住绑定 | 本次升级测试时两端本地配对凭据不一致，用户重新扫描当前二维码同步后加密连接成功；随后 force-stop 手机应用再启动，自动重连同一 Windows 进程并再次自动发送目录，无需扫码 |
+
+真机中文文件为 49 字节，Windows 源、手机接收及 Windows 回传的 SHA-256 均为 `717852d41b22456cc31f7698a7e6cea5bee85505ab282d270a03cb1e2d75c6cd`。真机验证使用小型测试目录；大目录、手机低空间、不同 SAF 提供方、系统突然关机及后台长时间运行尚未逐一实测。设备禁止 ADB 代点和测试 APK 安装，系统文件夹选择/授权由用户完成；生产 SAF 接收和分享发送通过正式应用验证，不声称 instrumentation 已运行。
+
+此前 Android 1.3.1 修复 Network.bindSocket EPERM 及前台服务启动顺序，27 项 JVM 测试记录和用户扫码、进程重建自动重连记录继续保留。非绕行 VPN 拒绝显式绑定 Wi-Fi 时继续使用新的系统默认路由 socket，本次未更改该策略。
 
 | 检查 | 结果 |
 | --- | --- |

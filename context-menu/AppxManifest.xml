@@ -7,7 +7,7 @@
   xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap uap10 com desktop4 desktop5 rescap">
-  <Identity Name="LanBridge.ContextMenu" Publisher="CN=LanBridge Desktop Context Menu" Version="1.5.0.0" ProcessorArchitecture="x64" />
+  <Identity Name="LanBridge.ContextMenu" Publisher="CN=LanBridge Desktop Context Menu" Version="1.6.0.0" ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>LanBridge</DisplayName>
     <PublisherDisplayName>LanBridge</PublisherDisplayName>
@@ -28,6 +28,7 @@
         <desktop4:Extension Category="windows.fileExplorerContextMenus">
           <desktop4:FileExplorerContextMenus>
             <desktop5:ItemType Type="*"><desktop5:Verb Id="LanBridgeSendToPhone" Clsid="06F3B110-144B-4CD2-89DB-BFAE841E7179" /></desktop5:ItemType>
+            <desktop5:ItemType Type="Directory"><desktop5:Verb Id="LanBridgeSendFolderToPhone" Clsid="06F3B110-144B-4CD2-89DB-BFAE841E7179" /></desktop5:ItemType>
           </desktop4:FileExplorerContextMenus>
         </desktop4:Extension>
       </Extensions>

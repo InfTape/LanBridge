@@ -2,7 +2,7 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.plugin.compose
 android {
     namespace = "dev.lanbridge"
     compileSdk = 37
-    defaultConfig { applicationId = "dev.lanbridge"; minSdk = 31; targetSdk = 36; versionCode = 7; versionName = "1.3.1" }
+    defaultConfig { applicationId = "dev.lanbridge"; minSdk = 31; targetSdk = 36; versionCode = 8; versionName = "1.4.0" }
     defaultConfig { testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

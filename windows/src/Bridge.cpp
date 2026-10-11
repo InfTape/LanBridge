@@ -1,4 +1,5 @@
 #include "Bridge.h"
+#include "FolderTransfer.h"
 #include <bcrypt.h>
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
@@ -131,7 +132,8 @@ void Channel::Send(unsigned char type,const Bytes& data) {
     ULONG written=0;
     Check(BCryptEncrypt(static_cast<BCRYPT_KEY_HANDLE>(key_),plain.data(),static_cast<ULONG>(plain.size()),&info,nullptr,0,cipher.data(),static_cast<ULONG>(cipher.size()),&written,0));
     uint32_t length=htonl(static_cast<uint32_t>(12+cipher.size()+16));
-    Exact(socket_,&length,4,true); Exact(socket_,nonce.data(),12,true); Exact(socket_,cipher.data(),cipher.size(),true); Exact(socket_,tag.data(),16,true); ++tx_;
+    try { Exact(socket_,&length,4,true); Exact(socket_,nonce.data(),12,true); Exact(socket_,cipher.data(),cipher.size(),true); Exact(socket_,tag.data(),16,true); ++tx_; }
+    catch(...) { Close(); throw; }
 }
 std::pair<unsigned char,Bytes> Channel::Receive() {
     uint32_t wire=0; Exact(socket_,&wire,4,false); auto n=ntohl(wire);
@@ -148,6 +150,7 @@ std::pair<unsigned char,Bytes> Channel::Receive() {
 Server::Server(std::filesystem::path directory,Callback callback):directory_(std::move(directory)),callback_(std::move(callback)) {
     WSADATA data; if(WSAStartup(MAKEWORD(2,2),&data)) throw std::runtime_error("Winsock startup failed");
     std::filesystem::create_directories(directory_);
+    folders::Recover(directory_);
 }
 Server::~Server() { Stop(); WSACleanup(); }
 void Server::Emit(Event e) { callback_(std::move(e)); }
@@ -176,28 +179,58 @@ void Server::Run(uint16_t port,std::string code) {
         SOCKET s=accept(listener,nullptr,nullptr); if(s==INVALID_SOCKET) break;
         pending_=s; DWORD timeout=10000; setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<char*>(&timeout),sizeof(timeout)); setsockopt(s,SOL_SOCKET,SO_SNDTIMEO,reinterpret_cast<char*>(&timeout),sizeof(timeout));
         std::shared_ptr<Channel> c;
+        std::wstring disconnectReason;
         try {
             Bytes greeting{'L','B','0','1'}; auto salt=Random(16); greeting.insert(greeting.end(),salt.begin(),salt.end()); Exact(s,greeting.data(),greeting.size(),true);
             c=std::make_shared<Channel>(s,code,salt,true); pending_=INVALID_SOCKET;
             { std::lock_guard lock(mutex_); channel_=c; }
             auto [type,data]=c->Receive(); if(type!=1 || data.empty() || data.size()>256) throw std::runtime_error("Invalid hello");
-            auto peer=Wide(std::string(data.begin(),data.end()));
-            std::string hello="Windows"; c->Send(1,Bytes(hello.begin(),hello.end()));
+            auto peerText=std::string(data.begin(),data.end());
+            peerFolders_=peerText.ends_with("\nLB-FOLDER1");
+            auto peer=Wide(peerText.substr(0,peerText.find('\n')));
+            std::string hello="Windows\nLB-FOLDER1"; c->Send(1,Bytes(hello.begin(),hello.end()));
             timeout=45000; setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<char*>(&timeout),sizeof(timeout));
             authenticated_=true; Emit({Event::Connected,L"已连接 · "+peer}); Session(c);
-        } catch(const std::exception& e) { if(!stopping_) Emit({Event::Error,Wide(e.what())}); }
+        } catch(const std::exception& e) { disconnectReason=Wide(e.what()); if(!stopping_) Emit({Event::Error,disconnectReason}); }
         authenticated_=false;
+        peerFolders_=false; replyCv_.notify_all();
         { std::lock_guard lock(mutex_); channel_.reset(); }
         if(c) c->Close(); else { pending_=INVALID_SOCKET; closesocket(s); }
-        if(!stopping_) { Emit({Event::Disconnected,L"连接已断开 · 等待重新配对"}); for(int i=0;i<10 && !stopping_;i++) Sleep(100); }
+        if(!stopping_) { Emit({Event::Disconnected,L"连接已断开 · 等待重连"+(disconnectReason.empty()?L"":L" · "+disconnectReason)}); for(int i=0;i<10 && !stopping_;i++) Sleep(100); }
     }
     auto s=listener_.exchange(INVALID_SOCKET); if(s!=INVALID_SOCKET) closesocket(s);
 }
 void Server::Session(const std::shared_ptr<Channel>& c) {
     std::unique_ptr<Incoming> incoming;
+    std::unique_ptr<folders::Receiver> folder;
     auto lastProgress=std::chrono::steady_clock::now();
     while(!stopping_) {
         auto [type,data]=c->Receive();
+        if(type==14 || type==15) { FolderReply(type,data); continue; }
+        if(type==9) {
+            if(incoming || folder || !peerFolders_) throw std::runtime_error("Unexpected folder start");
+            auto header=folders::DecodeHeader(data);
+            try { folder=std::make_unique<folders::Receiver>(directory_,header); }
+            catch(const std::exception& e) { c->Send(14,folders::Reply(header.id,false,e.what())); continue; }
+            c->Send(14,folders::Reply(header.id,true)); Emit({Event::FolderProgress,L"接收文件夹 "+Wide(header.name),{},0,header.bytes}); continue;
+        }
+        if(type==13) {
+            if(!folder || data.size()!=8 || folders::Id(data)!=folder->Metadata().id) throw std::runtime_error("Unexpected folder cancellation");
+            auto id=folder->Metadata().id; folder.reset(); c->Send(15,folders::Reply(id,false,"Sender cancelled folder")); Emit({Event::Folder,L"文件夹传输已取消",{}}); continue;
+        }
+        if(type==12) {
+            if(!folder || data.size()!=8 || folders::Id(data)!=folder->Metadata().id) throw std::runtime_error("Unexpected folder completion");
+            auto id=folder->Metadata().id;
+            auto path=folder->Commit(); folder.reset(); c->Send(15,folders::Reply(id,true));
+            Emit({Event::Folder,path.filename().wstring(),path}); continue;
+        }
+        if(type==10 || type==11 || (folder && (type==4 || type==5))) {
+            if(!folder) throw std::runtime_error("Missing folder transaction");
+            folder->Consume(type,data);
+            auto now=std::chrono::steady_clock::now();
+            if(now-lastProgress>std::chrono::milliseconds(150)) { Emit({Event::FolderProgress,L"接收文件夹 "+Wide(folder->Metadata().name),{},folder->Done(),folder->Metadata().bytes}); lastProgress=now; }
+            continue;
+        }
         switch(type) {
         case 2: {
             if(data.empty()) throw std::runtime_error("Empty text");
@@ -206,7 +239,7 @@ void Server::Session(const std::shared_ptr<Channel>& c) {
             Emit({Event::Text,std::move(text)}); break;
         }
         case 3: {
-            if(incoming || data.size()<10) throw std::runtime_error("Unexpected file header");
+            if(incoming || folder || data.size()<10) throw std::runtime_error("Unexpected file header");
             size_t n=(data[0]<<8)|data[1]; if(data.size()!=n+10) throw std::runtime_error("Invalid filename length");
             auto name=SafeName(std::string(data.begin()+2,data.begin()+2+n)); auto size=Get64(data,2+n);
             if(size>100ULL*1024*1024*1024) throw std::runtime_error("File exceeds 100 GiB limit");
@@ -257,6 +290,23 @@ void Server::SendFiles(const std::vector<std::filesystem::path>& files) {
     if(!c || !authenticated_) throw std::runtime_error("Android is not connected");
     bool started=false;
     try { for(const auto& path:files) {
+        if(std::filesystem::is_directory(path)) {
+            if(!peerFolders_) throw std::runtime_error("请先将手机应用更新至支持文件夹的版本");
+            auto plan=folders::Collect(path); auto id=std::stoull(RandomCode(),nullptr,16); if(!id) id=1;
+            ExpectFolderReply(id,14); c->Send(9,folders::EncodeHeader({id,plan.name,plan.files,plan.directories,plan.bytes})); WaitFolderReply();
+            try {
+                auto last=std::chrono::steady_clock::now();
+                folders::Send(*c,plan,[&](uint64_t done,uint64_t total) {
+                    auto now=std::chrono::steady_clock::now(); if(done==0 || now-last>std::chrono::milliseconds(150)) { Emit({Event::Progress,L"发送文件夹 "+Wide(plan.name),{},done,total}); last=now; }
+                });
+            } catch(...) {
+                auto error=std::current_exception(); Bytes cancel=folders::Reply(id,false); cancel.resize(8);
+                try { c->Send(13,cancel); } catch(...) { c->Close(); }
+                std::rethrow_exception(error);
+            }
+            ExpectFolderReply(id,15); Bytes end=folders::Reply(id,true); end.resize(8); c->Send(12,end); WaitFolderReply();
+            Emit({Event::Progress,L"文件夹发送完成",{},plan.bytes,plan.bytes}); continue;
+        }
         auto name=Utf8(path.filename().wstring()); SafeName(name);
         std::ifstream stream(path,std::ios::binary); if(!stream) throw std::runtime_error("Cannot open selected file");
         auto size=std::filesystem::file_size(path); if(size>100ULL*1024*1024*1024) throw std::runtime_error("File exceeds 100 GiB");
@@ -275,5 +325,17 @@ void Server::SendFiles(const std::vector<std::filesystem::path>& files) {
 void Server::Acknowledge(const std::wstring& message) {
     auto c=Active(); if(!c || !authenticated_) return;
     auto s=Utf8(message); try { c->Send(6,Bytes(s.begin(),s.end())); } catch(...) { c->Close(); }
+}
+void Server::ExpectFolderReply(uint64_t id,unsigned char phase) { std::lock_guard lock(replyMutex_); awaitingFolder_=id; awaitingPhase_=phase; replyReceived_=false; replyReason_.clear(); }
+void Server::FolderReply(unsigned char type,const Bytes& data) {
+    auto id=folders::Id(data); auto accepted=folders::Accepted(data); auto reason=folders::Reason(data);
+    std::lock_guard lock(replyMutex_);
+    if(awaitingFolder_==id && awaitingPhase_==type && !replyReceived_) { replyAccepted_=accepted; replyReason_=reason; replyReceived_=true; replyCv_.notify_all(); }
+}
+void Server::WaitFolderReply() {
+    std::unique_lock lock(replyMutex_);
+    if(!replyCv_.wait_for(lock,std::chrono::seconds(30),[&]{return replyReceived_ || !authenticated_;})) { auto c=Active(); if(c) c->Close(); throw std::runtime_error("Folder response timed out"); }
+    if(!replyReceived_) throw std::runtime_error("Folder connection closed");
+    if(!replyAccepted_) throw std::runtime_error(replyReason_.empty()?"Folder was rejected":replyReason_);
 }
 }

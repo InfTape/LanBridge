@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <condition_variable>
 
 namespace bridge {
 using Bytes = std::vector<unsigned char>;
@@ -44,7 +45,7 @@ private:
     std::atomic<bool> closed_{false};
 };
 struct Event {
-    enum Kind { Connected, Disconnected, Text, File, Progress, Info, Error, Ack } kind;
+    enum Kind { Connected, Disconnected, Text, File, Progress, Info, Error, Ack, Folder, FolderProgress } kind;
     std::wstring message;
     std::filesystem::path path;
     uint64_t current = 0, total = 0;
@@ -73,6 +74,16 @@ private:
     std::atomic<SOCKET> listener_{INVALID_SOCKET}, pending_{INVALID_SOCKET};
     mutable std::mutex mutex_;
     std::mutex transferMutex_;
+    std::atomic<bool> peerFolders_{false};
+    std::mutex replyMutex_;
+    std::condition_variable replyCv_;
+    uint64_t awaitingFolder_=0;
+    unsigned char awaitingPhase_=0;
+    bool replyReceived_=false, replyAccepted_=false;
+    std::string replyReason_;
+    void FolderReply(unsigned char type, const Bytes& data);
+    void ExpectFolderReply(uint64_t id, unsigned char phase);
+    void WaitFolderReply();
     std::shared_ptr<Channel> channel_;
 };
 }

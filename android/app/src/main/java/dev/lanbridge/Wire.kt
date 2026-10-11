@@ -33,8 +33,10 @@ class Wire(private val socket: Socket, code: String) : AutoCloseable {
         cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, nonce))
         cipher.updateAAD(ByteBuffer.allocate(9).put(0.toByte()).putLong(tx).array())
         val encrypted = cipher.doFinal(byteArrayOf(type.toByte()) + data)
-        output.writeInt(nonce.size + encrypted.size)
-        output.write(nonce); output.write(encrypted); output.flush(); tx++
+        try {
+            output.writeInt(nonce.size + encrypted.size)
+            output.write(nonce); output.write(encrypted); output.flush(); tx++
+        } catch(e: java.io.IOException) { close(); throw e }
     }
     fun receive(): Pair<Int, ByteArray> {
         val length = input.readInt()

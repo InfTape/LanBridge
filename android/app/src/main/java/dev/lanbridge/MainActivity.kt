@@ -72,6 +72,9 @@ class MainActivity : ComponentActivity() {
     var code by remember { mutableStateOf("") }
     var text by rememberSaveable { mutableStateOf("") }
     val chooser = androidx.activity.compose.rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> if(uris.isNotEmpty()) engine.sendFiles(uris) }
+    val folderChooser = androidx.activity.compose.rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if(uri != null) engine.sendFolder(uri) }
+    var folderDestination by remember { mutableStateOf(engine.folderDestination()) }
+    val receiveFolderChooser = androidx.activity.compose.rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if(uri != null) { engine.setFolderDestination(uri); folderDestination = engine.folderDestination() } }
     val scanner = androidx.activity.compose.rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if(result.resultCode == android.app.Activity.RESULT_OK) {
             try {
@@ -116,13 +119,15 @@ class MainActivity : ComponentActivity() {
                 SendCard(state, text, { text = it },
                     send = { engine.sendText(text) },
                     paste = { text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty() },
-                    choose = { chooser.launch(arrayOf("*/*")) })
+                    choose = { chooser.launch(arrayOf("*/*")) },
+                    chooseFolder = { folderChooser.launch(null) })
             }
             if(maxWidth >= 840.dp) {
                 Row(Modifier.fillMaxSize().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     Column(Modifier.width(320.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) { Hero(state); pairPanel() }
                     LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         item { sendPanel() }
+                        item { FolderDestination(folderDestination) { receiveFolderChooser.launch(null) } }
                         item { ReceivedHeading(state, engine) }
                         itemsIndexed(state.received) { _, item -> ReceivedCard(item, engine) }
                         item { Spacer(Modifier.height(20.dp)) }
@@ -133,6 +138,7 @@ class MainActivity : ComponentActivity() {
                     item { Hero(state) }
                     item { pairPanel() }
                     item { sendPanel() }
+                    item { FolderDestination(folderDestination) { receiveFolderChooser.launch(null) } }
                     item { ReceivedHeading(state, engine) }
                     itemsIndexed(state.received) { _, item -> ReceivedCard(item, engine) }
                     item { Spacer(Modifier.height(12.dp)) }
@@ -174,7 +180,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-@Composable private fun SendCard(state: TransferState, text: String, onText: (String) -> Unit, send: () -> Unit, paste: () -> Unit, choose: () -> Unit) {
+@Composable private fun SendCard(state: TransferState, text: String, onText: (String) -> Unit, send: () -> Unit, paste: () -> Unit, choose: () -> Unit, chooseFolder: () -> Unit) {
     val ready = state.connected && !state.sending
     ElevatedCard(shape = RoundedCornerShape(28.dp)) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -186,6 +192,7 @@ class MainActivity : ComponentActivity() {
                 FilledTonalButton(onClick = paste, modifier = Modifier.weight(1f).height(52.dp)) { Text("粘贴文本") }
             }
             FilledTonalButton(onClick = choose, enabled = ready, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text(if(state.sending) "正在发送…" else "选择文件 · 支持多选") }
+            FilledTonalButton(onClick = chooseFolder, enabled = ready, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("选择文件夹 · 自动发送") }
             if(state.pendingShares > 0) {
                 Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -193,6 +200,15 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+}
+@Composable private fun FolderDestination(configured: Boolean, choose: () -> Unit) {
+    ElevatedCard(shape = RoundedCornerShape(28.dp)) {
+        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("接收文件夹", style = MaterialTheme.typography.titleLarge)
+            Text(if(configured) "保存位置已授权，会保留完整层级和空文件夹。" else "首次接收文件夹，需授权一个保存位置；以后自动保存。", style = MaterialTheme.typography.bodyMedium)
+            FilledTonalButton(onClick = choose, modifier = Modifier.fillMaxWidth()) { Text(if(configured) "更改保存位置" else "选择保存位置") }
         }
     }
 }
@@ -222,8 +238,8 @@ class MainActivity : ComponentActivity() {
                     TextButton(onClick = {
                         try { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(item.uri, context.contentResolver.getType(item.uri!!) ?: "application/octet-stream").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
                         catch(_: Exception) { engine.report("没有可打开此文件的应用，可使用分享或系统文件管理器") }
-                    }) { Text("打开") }
-                    TextButton(onClick = {
+                    }) { Text(if(item.directory) "打开文件夹" else "打开") }
+                    if(!item.directory) TextButton(onClick = {
                         try { context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("*/*").putExtra(Intent.EXTRA_STREAM, item.uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "分享文件")) }
                         catch(_: Exception) { engine.report("无法分享，请在系统文件管理器中打开 下载/LanBridge") }
                     }) { Text("分享") }

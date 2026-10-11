@@ -26,13 +26,14 @@ class DiscoveryProtocolTest {
     }
     @Test fun liveWindowsDiscoveryInterop() {
         val port = System.getenv("LANBRIDGE_DISCOVERY_TEST_PORT")
+        val fixtureCode = System.getenv("LANBRIDGE_TEST_CODE") ?: code
         assumeTrue("Windows UDP fixture not requested", port != null)
         DatagramSocket().use { socket ->
             socket.soTimeout = 3000
             val request = DiscoveryProtocol.request(nonce)
             socket.send(DatagramPacket(request, request.size, InetAddress.getByName("127.0.0.1"), port!!.toInt()))
             val packet = DatagramPacket(ByteArray(256), 256); socket.receive(packet)
-            assertEquals(Pairing("127.0.0.1", 42831, code), DiscoveryProtocol.verify(packet.data.copyOf(packet.length), nonce, "127.0.0.1", code))
+            assertEquals(Pairing("127.0.0.1", 42831, fixtureCode), DiscoveryProtocol.verify(packet.data.copyOf(packet.length), nonce, "127.0.0.1", fixtureCode))
         }
     }
 }

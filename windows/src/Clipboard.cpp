@@ -32,7 +32,8 @@ bool CopyFiles(HWND owner, const std::vector<std::filesystem::path>& files) {
     std::wstring names;
     for(const auto& file:files) {
         std::error_code error;
-        if(!std::filesystem::is_regular_file(file,error) || error) return false;
+        auto status=std::filesystem::status(file,error);
+        if(error || (!std::filesystem::is_regular_file(status) && !std::filesystem::is_directory(status))) return false;
         names += std::filesystem::absolute(file).wstring(); names += L'\0';
     }
     names += L'\0';
@@ -76,7 +77,8 @@ std::vector<std::filesystem::path> ReadFiles(HWND owner) {
             for(UINT i=0;i<n;i++) {
                 std::wstring p(DragQueryFileW(h,i,nullptr,0)+1,L'\0');
                 DragQueryFileW(h,i,p.data(),static_cast<UINT>(p.size())); p.pop_back();
-                if(std::filesystem::is_regular_file(p)) result.emplace_back(p);
+                std::error_code error; auto status=std::filesystem::status(p,error);
+                if(!error && (std::filesystem::is_regular_file(status) || std::filesystem::is_directory(status))) result.emplace_back(p);
             }
         }
         CloseClipboard();

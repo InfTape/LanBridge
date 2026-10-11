@@ -33,7 +33,7 @@ public:
         try { return SHStrDupW((ModulePath().wstring()+L",-101").c_str(),icon); }
         catch(...) { return E_FAIL; }
     }
-    HRESULT STDMETHODCALLTYPE GetToolTip(IShellItemArray*, PWSTR* tooltip) override { return SHStrDupW(L"通过 LanBridge 发送所选文件到已配对的手机",tooltip); }
+    HRESULT STDMETHODCALLTYPE GetToolTip(IShellItemArray*, PWSTR* tooltip) override { return SHStrDupW(L"通过 LanBridge 发送所选文件或文件夹到已配对的手机",tooltip); }
     HRESULT STDMETHODCALLTYPE GetCanonicalName(GUID* name) override { if(!name) return E_POINTER; *name = CommandId; return S_OK; }
     HRESULT STDMETHODCALLTYPE GetState(IShellItemArray* items, BOOL, EXPCMDSTATE* state) override {
         if(!state) return E_POINTER; *state = ECS_HIDDEN;
@@ -49,7 +49,7 @@ public:
             PWSTR path = nullptr; auto result = item->GetDisplayName(SIGDN_FILESYSPATH,&path); item->Release();
             DWORD fileAttributes = SUCCEEDED(result) && path ? GetFileAttributesW(path) : INVALID_FILE_ATTRIBUTES;
             CoTaskMemFree(path);
-            if(fileAttributes == INVALID_FILE_ATTRIBUTES || (fileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return S_OK;
+            if(fileAttributes == INVALID_FILE_ATTRIBUTES || (fileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return S_OK;
         }
         *state = ECS_ENABLED; return S_OK;
     }
