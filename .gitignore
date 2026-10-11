@@ -1,0 +1,27 @@
+windows/build/
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/local.properties
+.idea/
+*.part
+LanBridgeShell.dll
+context-menu/*.msix
+context-menu/*.cer
+*.pfx
+
+# Generated applications, native build outputs, and signing material
+*.exe
+*.apk
+*.aab
+*.dll
+*.pdb
+*.obj
+*.lib
+*.ilk
+*.msix
+*.p12
+*.jks
+*.keystore
+*.key
+*.pem

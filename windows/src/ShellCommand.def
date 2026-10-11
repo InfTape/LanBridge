@@ -1,0 +1,4 @@
+LIBRARY LanBridgeShell
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
