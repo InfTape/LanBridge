@@ -1,6 +1,7 @@
 #include "Bridge.h"
 #include "ShellTransfer.h"
 #include "Startup.h"
+#include "Pairing.h"
 #include "AppIcon.h"
 #include "ui/UiTypography.h"
 #include "ui/TitleBar.h"
@@ -20,11 +21,12 @@
 namespace {
 constexpr UINT EventsMessage=WM_APP+1,TrayMessage=WM_APP+2;
 const UINT TaskbarCreatedMessage=RegisterWindowMessageW(L"TaskbarCreated");
-enum ControlId { Ip=100,Code,CopyLink,Disconnect,Text,SendText,SendClipboard,SendFile,OpenFolder,History,Recopy,Clear,Progress,Status,EnableMenu,DisableMenu,Startup,Qr=200,Exit=900 };
+enum ControlId { Ip=100,Code,CopyLink,Disconnect,Text,SendText,SendClipboard,SendFile,OpenFolder,History,Recopy,Clear,Progress,Status,EnableMenu,DisableMenu,Startup,ResetPairing,Qr=200,Exit=900 };
 struct Record { bool file; std::wstring text; std::filesystem::path path; };
 class App {
     HWND window_=nullptr;
     std::unique_ptr<bridge::Server> server_;
+    pairing::Discovery discovery_;
     std::filesystem::path folder_;
     std::string code_;
     std::optional<qrcodegen::QrCode> qr_;
@@ -50,9 +52,9 @@ class App {
     ui::TitleBar titleBar_;
     ui::PopupMenu popup_;
 public:
-    ~App() { if(server_) server_->Stop(); if(sender_.joinable()) sender_.join(); if(integration_.joinable()) integration_.join(); for(auto f:fonts_) DeleteObject(f); DeleteObject(background_); DeleteObject(card_); }
+    ~App() { discovery_.Stop(); if(server_) server_->Stop(); if(sender_.joinable()) sender_.join(); if(integration_.joinable()) integration_.join(); for(auto f:fonts_) DeleteObject(f); DeleteObject(background_); DeleteObject(card_); }
     int Run(HINSTANCE instance,int show,const shelltransfer::Paths& initial = {}) {
-        folder_=bridge::ReceiveDirectory(); code_=bridge::RandomCode();
+        folder_=bridge::ReceiveDirectory(); code_=pairing::LoadOrCreate(pairing::CredentialPath());
         WNDCLASSEXW wc{sizeof(wc)}; wc.lpfnWndProc=Proc; wc.hInstance=instance; wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
         wc.hIcon=LoadAppIcon(GetSystemMetricsForDpi(SM_CXICON,GetDpiForSystem())); wc.hIconSm=LoadAppIcon(GetSystemMetricsForDpi(SM_CXSMICON,GetDpiForSystem())); wc.lpszClassName=L"LanBridgeWindow";
         RegisterClassExW(&wc);
@@ -64,6 +66,7 @@ public:
         if(!window_) return 1;
         server_=std::make_unique<bridge::Server>(folder_,[this](bridge::Event e) { Queue(std::move(e)); });
         server_->Start(42831,code_);
+        discovery_.Start(code_);
         ShowWindow(window_,show); UpdateWindow(window_);
         if(!initial.empty()) AcceptFiles(initial);
         MSG m; while(GetMessageW(&m,nullptr,0,0)>0) { if(!IsDialogMessageW(window_,&m)) { TranslateMessage(&m); DispatchMessageW(&m); } }
@@ -109,7 +112,8 @@ private:
         Control(L"EDIT",bridge::Wide(code_).c_str(),Code,ES_READONLY|ES_CENTER|WS_TABSTOP,WS_EX_CLIENTEDGE);
         Control(L"BUTTON",L"复制连接信息",CopyLink,WS_TABSTOP);
         Control(L"BUTTON",L"断开设备",Disconnect,WS_TABSTOP);
-        Control(L"STATIC",L"手机扫描上方二维码即可连接",15);
+        Control(L"STATIC",L"首次扫码，以后自动连接",15);
+        Control(L"BUTTON",L"重置配对",ResetPairing,WS_TABSTOP);
         Control(L"STATIC",L"02   发送到手机",16);
         Control(L"EDIT",L"",Text,WS_TABSTOP|ES_MULTILINE|ES_AUTOVSCROLL|WS_VSCROLL|ES_WANTRETURN,WS_EX_CLIENTEDGE);
         SendMessageW(Item(Text),EM_SETCUEBANNER,TRUE,reinterpret_cast<LPARAM>(L"输入要发送的文本…"));
@@ -145,7 +149,7 @@ private:
         Place(15,40,afterQr+5,246,28);
         Place(13,40,afterQr+42,80,25); Place(Ip,124,afterQr+38,162,240);
         Place(14,40,afterQr+78,246,25); Place(Code,40,afterQr+107,246,31);
-        Place(CopyLink,40,afterQr+151,246,33); Place(Disconnect,40,afterQr+194,246,33);
+        Place(CopyLink,40,afterQr+151,246,33); Place(Disconnect,40,afterQr+194,117,33); Place(ResetPairing,169,afterQr+194,117,33);
         Place(16,324,111,right,28); Place(Text,324,151,editor,123);
         Place(SendText,w-230,151,190,32); Place(SendClipboard,w-230,193,190,32); Place(SendFile,w-230,235,190,32);
         Place(17,324,289,right,25);
@@ -204,7 +208,7 @@ private:
         pendingFiles_.push_back(std::move(paths));
         if(!server_) return true;
         if(!server_->IsConnected()) {
-            StatusText(L"右键分享已排队 · 请用手机扫描二维码，连接后自动发送");
+            StatusText(L"右键分享已排队 · 打开手机 LanBridge 自动连接；首次使用请扫码");
             ShowWindow(window_,SW_RESTORE); SetForegroundWindow(window_);
         } else if(sending_) StatusText(L"右键分享已排队 · 当前传输完成后自动发送");
         PumpFiles(); return true;
@@ -273,15 +277,18 @@ private:
                 server_->Acknowledge(ok?L"Windows 已接收文本并复制到剪贴板":L"Windows 已接收文本，剪贴板占用"); break;
             }
             case bridge::Event::File: {
+                receiving_=false;
                 bool ok=bridge::CopyFiles(window_,{e.path}); RecordReceived({true,L"",e.path});
                 StatusText(ok?L"收到 "+e.message+L" · 已复制到文件剪贴板":L"文件已保存 · 剪贴板暂时被占用，请点重新复制");
                 server_->Acknowledge(ok?L"Windows 已保存并复制文件："+e.message:L"Windows 已保存文件，剪贴板占用"); break;
             }
             case bridge::Event::Progress: {
+                if(e.message.starts_with(L"接收")) receiving_=e.current<e.total;
                 int n=e.total ? static_cast<int>(e.current*100/e.total) : 100;
                 SendMessageW(Item(Progress),PBM_SETPOS,n,0);
                 StatusText(e.message+L" · "+std::to_wstring(n)+L"%  ("+std::to_wstring(e.current/1024)+L" / "+std::to_wstring(e.total/1024)+L" KiB)"); break;
             }
+            case bridge::Event::Disconnected: receiving_=false; [[fallthrough]];
             default: if(!e.message.empty()) StatusText(e.message); break;
             }
         }
@@ -296,6 +303,17 @@ private:
             StatusText(bridge::CopyText(window_,uri)?L"连接信息已复制，可粘贴到 Android 配对页":L"剪贴板被占用，请重试"); break;
         }
         case Disconnect: server_->Disconnect(); break;
+        case ResetPairing: {
+            if(sending_ || receiving_) { StatusText(L"请等待当前传输完成后重置配对"); break; }
+            if(MessageBoxW(window_,L"重置后，已绑定手机需要重新扫码。是否继续？",L"重置配对",MB_YESNO|MB_ICONQUESTION)!=IDYES) break;
+            try {
+                auto code=bridge::RandomCode(); pairing::Save(pairing::CredentialPath(),code);
+                discovery_.Stop(); server_->Stop(); code_=std::move(code);
+                SetWindowTextW(Item(Code),bridge::Wide(code_).c_str()); UpdateQr();
+                server_->Start(42831,code_); discovery_.Start(code_); StatusText(L"已重置配对 · 请手机重新扫码绑定");
+            } catch(const std::exception& e) { StatusText(bridge::Wide(e.what())); }
+            break;
+        }
         case EnableMenu: Integration(true); break;
         case DisableMenu: Integration(false); break;
         case Startup: {

@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
         if(Build.VERSION.SDK_INT >= 33) permissions.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.NEARBY_WIFI_DEVICES))
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); readShare(intent) }
+    override fun onStart() { super.onStart(); engine.resumeRemembered() }
     private fun readShare(intent: Intent?) {
         if(intent?.action != Intent.ACTION_SEND && intent?.action != Intent.ACTION_SEND_MULTIPLE) return
         val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
@@ -67,7 +68,8 @@ class MainActivity : ComponentActivity() {
     val state by engine.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var address by rememberSaveable { mutableStateOf(engine.savedAddress()) }
-    var code by rememberSaveable { mutableStateOf("") }
+    // Pairing secrets stay in the engine/Keystore, outside saved activity state.
+    var code by remember { mutableStateOf("") }
     var text by rememberSaveable { mutableStateOf("") }
     val chooser = androidx.activity.compose.rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> if(uris.isNotEmpty()) engine.sendFiles(uris) }
     val scanner = androidx.activity.compose.rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -76,6 +78,7 @@ class MainActivity : ComponentActivity() {
                 val value = requireNotNull(result.data?.getStringExtra(ScanActivity.RESULT_PAIRING))
                 val pair = Pairing.fromQr(value); address = "${pair.host}:${pair.port}"; code = pair.code
                 engine.connect(address, code)
+                code = ""
             } catch(e: Exception) { engine.report(e.message ?: "配对二维码无效") }
         }
     }
@@ -98,7 +101,9 @@ class MainActivity : ComponentActivity() {
             val pairPanel: @Composable () -> Unit = {
                 PairCard(state, address, { address = it }, code, { code = it },
                     scan = { scanner.launch(Intent(context, ScanActivity::class.java)) },
-                    connect = { engine.connect(address, code) },
+                    connect = { engine.connect(address, code); code = "" },
+                    reconnect = { engine.resumeRemembered(force = true) },
+                    forget = { engine.forgetPairing(); address = ""; code = "" },
                     paste = {
                         val value = clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
                         if(value.startsWith("lanbridge://")) {
@@ -146,13 +151,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-@Composable private fun PairCard(state: TransferState, address: String, onAddress: (String) -> Unit, code: String, onCode: (String) -> Unit, scan: () -> Unit, connect: () -> Unit, paste: () -> Unit) {
+@Composable private fun PairCard(state: TransferState, address: String, onAddress: (String) -> Unit, code: String, onCode: (String) -> Unit, scan: () -> Unit, connect: () -> Unit, reconnect: () -> Unit, forget: () -> Unit, paste: () -> Unit) {
     var manual by rememberSaveable { mutableStateOf(false) }
+    var confirmForget by remember { mutableStateOf(false) }
+    if(confirmForget) AlertDialog(onDismissRequest = { confirmForget = false }, title = { Text("解除绑定？") }, text = { Text("解除后，下次连接需要重新扫码。") }, confirmButton = { TextButton(onClick = { confirmForget = false; forget() }) { Text("解除绑定") } }, dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("取消") } })
     ElevatedCard(shape = RoundedCornerShape(28.dp)) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("连接电脑", style = MaterialTheme.typography.titleLarge)
-            Text("打开 Windows 端，扫描电脑上的二维码即可自动连接。", style = MaterialTheme.typography.bodyMedium)
-            Button(onClick = scan, enabled = !state.connecting && !state.connected, modifier = Modifier.fillMaxWidth().height(64.dp)) { Text(if(state.connected) "已连接电脑" else if(state.connecting) "连接中…" else "扫码连接 Windows") }
+            Text(if(state.remembered) "已绑定电脑，打开应用或分享文件时会自动连接。" else "第一次扫描 Windows 二维码绑定，以后自动连接。", style = MaterialTheme.typography.bodyMedium)
+            Button(onClick = if(state.remembered) reconnect else scan, enabled = !state.connecting && !state.connected, modifier = Modifier.fillMaxWidth().height(64.dp)) { Text(if(state.connected) "已连接电脑" else if(state.connecting) "连接中…" else if(state.remembered) "重新连接已绑定电脑" else "扫码绑定 Windows") }
+            if(state.remembered) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(onClick = scan, enabled = !state.connected && !state.connecting) { Text("扫描其他电脑") }
+                TextButton(onClick = { confirmForget = true }, enabled = !state.sending) { Text("解除绑定") }
+            }
             TextButton(onClick = { manual = !manual }, modifier = Modifier.fillMaxWidth()) { Text(if(manual) "收起手动连接" else "手动输入 / 粘贴连接信息") }
             if(manual) {
             OutlinedTextField(address, onAddress, label = { Text("电脑地址") }, placeholder = { Text("192.168.1.10") }, singleLine = true, modifier = Modifier.fillMaxWidth(), enabled = !state.connecting && !state.connected, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))

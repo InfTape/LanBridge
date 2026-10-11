@@ -1,18 +1,24 @@
 # 验证记录
 
-验证日期：2026-10-11。Windows 1.4.4，Android 1.2.2。本次修复 ZIP 被 Shell 文件夹属性误判而隐藏右键发送菜单，构建并更新菜单 DLL 与身份包，通过独立菜单选择测试及已注册 COM 测试；传输主程序未重启。以下其他集成结果保留自 1.4.3 及此前版本，本次未重跑需独占主程序的端到端用例。保留截图工具相同的 9pt 托盘设计、APK 应用图标、统一字体、开机启动设置与右键加载菜单断线修复。Android 真机分享结果来自 1.2.1，界面检查来自 1.2.2。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
+验证日期：2026-10-12。Windows 1.5.0，Android 1.3.0。本次实现首次扫码绑定、凭据安全保存、自动发现已绑定电脑、打开应用/系统分享时重连及临时断线重试。Windows 七项集成测试全部通过，另经已注册菜单进行保持连接回归；Android 构建、Lint、绑定加密及跨端发现与 Wire 互通通过。旧 Windows 已无手机连接时才退出更新，未中断文件传输。用户选择自行安装 APK，当前没有 ADB 设备，本次未进行 Android 真机安装与自动重连操作验证；下列 Android 真机记录来自 1.2.1/1.2.2。保留截图工具托盘设计、应用图标、统一字体、开机启动及 ZIP/右键断线修复。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
 
 | 检查 | 结果 |
 | --- | --- |
 | Windows Release 构建 | 通过；静态 C++ 运行库；只依赖系统 DLL |
+| 1.5.0 PairingIntegration | 通过；实际当前用户 DPAPI 保存/读取，重复启动复用同一凭据，磁盘内容无明文配对码，重置后新凭据可读取，损坏存储拒绝且不静默换码；跨端 HMAC 向量及实际 UDP 发现应答通过 |
+| 1.5.0 RememberedDesktopIntegration | 通过；实际 Win32 主程序以隐藏启动模式建立加密连接并交换心跳，正常退出再启动后配对码保持不变，用首次缓存的凭据直接再次握手并交换心跳；不读写剪贴板 |
+| Android 1.3.0 绑定保存 | RememberedPairingTest 3 tests 通过；AES-256-GCM 保存/恢复地址及凭据、密文不含明文凭据、随机 IV、篡改/错误密钥/错误版本及截断拒绝；Keystore 实际设备保存尚待真机验证 |
+| Android 1.3.0 发现互通 | DiscoveryProtocolTest 3 tests 通过；接受 Windows HMAC 向量及新地址、拒绝其他电脑凭据/篡改/旧挑战/错误长度，并经真实 Windows UDP fixture 验证生产发现解析 |
+| Android 1.3.0 自动重连 | 构建及 Lint 通过；代码在已认证 Hello 后记住绑定，在应用打开和系统分享时恢复，遇到临时断线重试；主动断开暂停，新的分享或重连按钮恢复；设备进程重建、Wi-Fi 地址变化及厂商后台限制的实际运行尚待用户安装后验证 |
+| Android 1.3.0 JVM 测试汇总 | 19 tests，0 failures，1 skipped；绑定加密、发现协议、配对校验、分享队列及实际 Wire/UDP 互通均运行通过；二维码外部图片 fixture 用例本次未配置而跳过，下方二维码完整验证为此前记录 |
 | StartupIntegration | 通过；独立测试键验证带空格和中文路径的命令、反复启用/取消和保留其他启动项；实际窗口以 `--startup` 保持隐藏并建立加密连接，重复自启动保持原连接，手动启动显示同一窗口；勾选框实际写入/删除 Run 值，结束后恢复原启动项；不改写剪贴板 |
 | 本机开机启动配置 | 已启用；通过正式程序勾选框配置当前用户 Run 值 `LanBridge`，实际值为 `"C:\Users\Admin\Desktop\LanBridge\LanBridge.exe" --startup`，勾选状态同步；未执行电脑重启，登录启动行为通过上述真实进程参数测试验证 |
 | 默认地址回归验证 | 通过；VPN `tun0`、VMware 与 Hyper-V 同时启用时，生产 `LocalAddresses()` 将真实 Wi-Fi `192.168.0.102` 排在第一位；虚拟网卡仅允许手动选择 |
 | BridgeIntegration | 通过；双向文本/文件、空文件、同名文件、心跳、坏摘要、错误配对码、目录穿越和中断清理 |
-| UiIntegration 剪贴板测试 | 1.4.3 通过；实际 Win32 窗口双向文本/文件、自动复制、历史重新复制；结束后恢复原剪贴板 |
+| UiIntegration 剪贴板测试 | 1.5.0 通过；实际 Win32 窗口双向文本/文件、自动复制、历史重新复制；结束后恢复原剪贴板 |
 | ShellIntegration | 通过；原生 IExplorerCommand、中文与多文件路径、格式损坏/相对路径/非法请求文件拒绝、文件夹隐藏、首次启动排队、已运行实例转交、连接后按序自动发送及 SHA-256 |
 | Windows 本地文件读取失败 | 通过；不存在的待发送文件报错后，原连接继续发送文本成功 |
-| Windows 11 菜单身份包 | MakeAppx 构建、Authenticode 签名验证及实际 Add-AppxPackage 注册通过；版本 1.4.4.0，外部目录绑定至桌面项目；随附公开证书，私钥未导出 |
+| Windows 11 菜单身份包 | MakeAppx 构建、Authenticode 签名验证及实际 Add-AppxPackage 注册通过；版本 1.5.0.0，外部目录绑定至桌面项目；随附公开证书，私钥未导出 |
 | 1.4.4 ZIP 回归 | 有效的空 ZIP 经真实 Windows Shell 解析，确认带有 SFGAO_FOLDER；原 DLL 复现 ZIP file state 失败，修复 DLL 的 ShellSelectionIntegration 通过；覆盖 ZIP 单选、ZIP 与普通文件多选，以及 ZIP 混合真实目录（目录名称也为 .zip）时隐藏菜单 |
 | 1.4.4 已注册菜单 | 更新身份包后，系统实际 CoCreateInstance 激活正式菜单 DLL，同一 ZIP 与目录回归通过；不调用 Invoke、不发送测试文件、不改写剪贴板 |
 | 1.4.4 更新保持手机连接 | 菜单更新及已注册 COM 检查前后，传输主进程 PID 15632 保持不变；同一手机 TCP 连接 192.168.0.100:34820、创建时间 14:59:32 均不变，无需重新配对 |
@@ -22,7 +28,7 @@
 | 重复启用菜单 | 通过；在同一加密连接中连续两次以原生 CreateProcess 后台启动实际注册脚本，均返回“无需重复注册”；原主进程和连接心跳保持正常。脚本优先使用当前 PowerShell 宿主的内置模块，避免继承 PowerShell 7 模块路径后加载失败 |
 | UiIntegration --qr | 通过；真正的 Win32 窗口生成当前 IPv4 及切换地址后的二维码渲染图，不改写剪贴板 |
 | Android assembleDebug | 通过；生成可安装测试签名 APK |
-| Android lintDebug | 通过，0 errors；保留部分非阻塞的依赖更新、API 目标和代码风格建议 |
+| Android lintDebug | 通过，0 errors、13 warnings；保留部分非阻塞的依赖更新、API 目标和代码风格建议 |
 | Android PairingTest | 5 tests，0 failures，0 skipped；包含二维码格式校验与无效内容拒绝 |
 | Android QrDecoderTest | 4 tests，0 failures，0 skipped；实际 Win32 二维码解码、地址刷新、旋转画面、相机亮度缓冲区与空画面 |
 | Android WireInteropTest | 1 test，0 failures，0 skipped；与 Windows fixture 实际互通 |
@@ -33,7 +39,7 @@
 | 实际分享自动复制 | 通过；Win32 测试读取 CF_HDROP，确认是本次分享文件；执行前备份并在结束后恢复原剪贴板 |
 | 不可读取文件后继续分享 | 通过；实际向应用分享不存在的 content URI，界面显示文件不可读取但仍连接；同一 TCP 连接下再次分享有效文件成功并自动复制 |
 | Android SharedFlowDeviceTest | 测试 APK 构建通过；当前手机系统拒绝安装测试 APK（INSTALL_FAILED_USER_RESTRICTED），尚未运行该完整测试 |
-| APK apksigner verify | 通过，APK Signature Scheme v2 |
+| APK apksigner verify | 通过，APK Signature Scheme v2；1.3.0 与旧 APK 签名证书 SHA-256 相同，可覆盖更新 |
 | 1.4.2 应用图标 | 通过；Win32 从实际 EXE 资源加载 16～256 像素的 10 种尺寸；正式主窗口的大小图标均已设置；实际标题栏截图与 EXE 图标渲染已检查；四项 Windows 集成测试和已注册菜单连接回归通过 |
 | 1.4.3 托盘尺寸 | 通过；TypographyPreview 捕获两个正式程序的实际菜单，当前屏幕均为 308 像素宽，字号、行高与文字边距一致；LanBridge 开机启动勾选未遮挡文字。四项 Windows 集成测试通过，最终菜单文案和宽度调整后再次通过 StartupIntegration 的连接、菜单与启动项检查 |
 | Windows 界面 | 已检查实际 Win32 渲染图，中文文字与控件布局可见 |

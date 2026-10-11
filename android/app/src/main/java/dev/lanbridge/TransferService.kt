@@ -21,7 +21,7 @@ class TransferService : Service() {
         if(intent?.action == "disconnect") { (application as BridgeApplication).engine.disconnect(); stopSelf() }
         return START_NOT_STICKY
     }
-    override fun onTimeout(startId: Int, fgsType: Int) { (application as BridgeApplication).engine.disconnect(); stopSelf() }
+    override fun onTimeout(startId: Int, fgsType: Int) { (application as BridgeApplication).engine.disconnect(false); stopSelf() }
     override fun onDestroy() { (application as BridgeApplication).engine.disconnect(false); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }

@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicLong
 class BridgeApplication : Application() { val engine by lazy { TransferEngine(this) } }
 data class Received(val name: String, val text: String? = null, val uri: Uri? = null, val size: Long = 0)
 data class TransferState(
-    val connected: Boolean = false, val connecting: Boolean = false,
+    val connected: Boolean = false, val connecting: Boolean = false, val remembered: Boolean = false,
     val sending: Boolean = false, val pendingShares: Int = 0, val status: String = "准备连接电脑",
     val peer: String = "", val progress: Float? = null, val progressLabel: String = "",
     val received: List<Received> = emptyList()
@@ -48,6 +48,11 @@ class TransferEngine(private val app: Application) {
     @Volatile private var wire: Wire? = null
     private var heartbeat: Job? = null
     private var sendJob: Job? = null
+    private var connectionJob: Job? = null
+    private val savedPairing = RememberedPairing(app)
+    private val discovery = PairingDiscovery(app)
+    @Volatile private var trustedPairing = runCatching { savedPairing.load() }.getOrNull()
+    @Volatile private var paused = false
     @Volatile private var sendDisconnectReason: Pair<Long,String>? = null
     private val resolver get() = app.contentResolver
     private val sharedQueue = SharedSendQueue<SharedContent>(scope,
@@ -56,7 +61,10 @@ class TransferEngine(private val app: Application) {
             if(share.files.isNotEmpty()) sendFilesData(channel, share.files)
             else { channel.send(2, textBytes(share.text)); report("分享文本已发送 · 等待 Windows 确认") }
         } })
-    init { scope.launch { sharedQueue.pending.collect { count -> mutable.update { it.copy(pendingShares = count) } } } }
+    init {
+        mutable.update { it.copy(remembered = trustedPairing != null) }
+        scope.launch { sharedQueue.pending.collect { count -> mutable.update { it.copy(pendingShares = count) } } }
+    }
 
     fun enqueueShare(text: String, files: List<Uri>) {
         val contentFiles = files.filter { it.scheme == "content" }.distinct()
@@ -66,52 +74,100 @@ class TransferEngine(private val app: Application) {
         }
         sharedQueue.enqueue(SharedContent(if(contentFiles.isEmpty()) text else "", contentFiles))
         if(!state.value.connected) report("分享已加入队列，连接电脑后自动发送")
+        resumeRemembered(force = true)
     }
 
     fun connect(address: String, code: String) {
         val pairing = try { Pairing.parse(address, code) } catch(e: Exception) { report(e.message ?: "地址无效"); return }
+        connectPair(pairing, automatic = false)
+    }
+    @Synchronized fun resumeRemembered(force: Boolean = false) {
+        if(state.value.connected || state.value.connecting || (paused && !force)) return
+        trustedPairing?.let { connectPair(it, automatic = true) }
+    }
+    fun forgetPairing() {
+        disconnect()
+        try {
+            savedPairing.forget(); trustedPairing = null
+            app.getSharedPreferences("pairing", 0).edit().remove("address").apply()
+            mutable.update { it.copy(remembered = false, status = "已解除绑定，首次连接请扫码") }
+        } catch(e: Exception) { report("无法解除绑定：${e.message}") }
+    }
+    private fun connectPair(initial: Pairing, automatic: Boolean) {
         disconnect(false)
+        paused = false
         val id = generation.incrementAndGet()
         sendDisconnectReason = null
-        mutable.update { it.copy(connecting = true, status = "正在连接 ${pairing.host}…", progress = null) }
-        app.getSharedPreferences("pairing", 0).edit().putString("address", "${pairing.host}:${pairing.port}").apply()
+        mutable.update { it.copy(connecting = true, status = if(automatic) "正在寻找已绑定电脑…" else "正在连接 ${initial.host}…", progress = null) }
         try { app.startForegroundService(Intent(app, TransferService::class.java)) }
         catch(e: Exception) { mutable.update { it.copy(connecting = false, status = "无法启动传输服务：${e.message}") }; return }
-        scope.launch {
-            var local: Socket? = null
-            var channel: Wire? = null
-            try {
-                local = Socket()
-                synchronized(this@TransferEngine) { if(generation.get() != id) { local.close(); return@launch }; socket = local }
-                local.connect(InetSocketAddress(pairing.host, pairing.port), 8000)
-                local.soTimeout = 10000; local.tcpNoDelay = true
-                channel = Wire(local, pairing.code)
-                channel.send(1, "${Build.MANUFACTURER} ${Build.MODEL}".toByteArray(Charsets.UTF_8))
-                val (type, data) = channel.receive()
-                require(type == 1 && data.size <= 256) { "电脑握手失败" }
-                local.soTimeout = 45000
-                synchronized(this@TransferEngine) { if(generation.get() != id) { channel.close(); return@launch }; wire = channel }
-                mutable.update { it.copy(connected = true, connecting = false, peer = pairing.host, status = "已连接 Windows · 可以开始互传") }
-                val active = channel
-                heartbeat = scope.launch { while(isActive && generation.get() == id) { delay(15000); try { active.send(7) } catch(_: Exception) { active.close(); break } } }
-                receive(active)
-            } catch(e: Exception) {
-                if(generation.get() == id) {
-                    android.util.Log.e("LanBridge","Connection ended",e)
-                    report(sendDisconnectReason?.takeIf { it.first == id }?.second ?: "连接结束：${friendly(e)}")
+        connectionJob = scope.launch {
+            var pairing = initial
+            var mayRetry = automatic
+            var failures = 0
+            while(isActive && generation.get() == id) {
+                var local: Socket? = null
+                var channel: Wire? = null
+                var authenticationFailed = false
+                try {
+                    if(mayRetry) runCatching { discovery.find(pairing) }.getOrNull()?.let { pairing = it }
+                    ensureActive()
+                    local = Socket()
+                    synchronized(this@TransferEngine) { if(generation.get() != id) { local.close(); return@launch }; socket = local }
+                    discovery.wifi()?.bindSocket(local)
+                    local.connect(InetSocketAddress(pairing.host, pairing.port), 3000)
+                    local.soTimeout = 10000; local.tcpNoDelay = true
+                    channel = Wire(local, pairing.code)
+                    channel.send(1, "${Build.MANUFACTURER} ${Build.MODEL}".toByteArray(Charsets.UTF_8))
+                    val (type, data) = channel.receive()
+                    require(type == 1 && data.size <= 256) { "电脑握手失败" }
+                    local.soTimeout = 45000
+                    // Only remember credentials after the encrypted hello proves the computer knows them.
+                    synchronized(this@TransferEngine) {
+                        if(generation.get() != id) { channel.close(); return@launch }
+                        wire = channel
+                        var saveFailure: String? = null
+                        try { savedPairing.save(pairing); trustedPairing = pairing }
+                        catch(e: Exception) { saveFailure = "已连接，但绑定信息未能保存：${e.message}" }
+                        app.getSharedPreferences("pairing", 0).edit().putString("address", "${pairing.host}:${pairing.port}").apply()
+                        mayRetry = trustedPairing?.code == pairing.code; failures = 0
+                        mutable.update { it.copy(connected = true, connecting = false, remembered = trustedPairing != null, peer = pairing.host, status = saveFailure ?: "已连接 Windows · 已记住绑定") }
+                    }
+                    val active = channel
+                    heartbeat = scope.launch { while(isActive && generation.get() == id) { delay(15000); try { active.send(7) } catch(_: Exception) { active.close(); break } } }
+                    receive(active)
+                } catch(e: Exception) {
+                    if(generation.get() == id) {
+                        android.util.Log.e("LanBridge","Connection ended",e)
+                        authenticationFailed = e is javax.crypto.AEADBadTagException
+                        if(authenticationFailed && automatic) {
+                            report("电脑配对信息已更改，请解除绑定后重新扫码")
+                        } else {
+                            report(sendDisconnectReason?.takeIf { it.first == id }?.second ?: "连接结束：${friendly(e)}")
+                        }
+                    }
+                } finally {
+                    channel?.close(); local?.close()
+                    if(generation.get() == id) {
+                        heartbeat?.cancel(); wire = null; socket = null
+                        sendJob?.cancelAndJoin()
+                        mutable.update { it.copy(connected = false, connecting = false, sending = false, progress = null) }
+                    }
                 }
-            } finally {
-                channel?.close(); local?.close()
-                if(generation.get() == id) {
-                    heartbeat?.cancel(); wire = null; socket = null
-                    mutable.update { it.copy(connected = false, connecting = false, sending = false, progress = null) }
-                    app.stopService(Intent(app, TransferService::class.java))
-                }
+                if(!mayRetry || authenticationFailed || generation.get() != id || !isActive) break
+                failures++
+                if(failures >= 30) { report("暂未找到已绑定电脑，打开电脑后点重新连接即可"); break }
+                mutable.update { it.copy(connecting = true, status = "等待已绑定电脑 · 自动重连中…") }
+                delay(minOf(1000L * failures, 10000L))
+            }
+            if(generation.get() == id) {
+                mutable.update { it.copy(connecting = false) }
+                app.stopService(Intent(app, TransferService::class.java))
             }
         }
     }
     fun disconnect(stopService: Boolean = true) {
-        synchronized(this) { generation.incrementAndGet(); heartbeat?.cancel(); sendJob?.cancel(); wire?.close(); wire = null; socket?.close(); socket = null }
+        synchronized(this) { generation.incrementAndGet(); if(stopService) paused = true; connectionJob?.cancel(); heartbeat?.cancel(); sendJob?.cancel(); wire?.close(); wire = null; socket?.close(); socket = null }
         mutable.update { it.copy(connected = false, connecting = false, sending = false, progress = null, status = if(stopService || it.connected || it.connecting) "已断开连接" else it.status) }
         if(stopService) app.stopService(Intent(app, TransferService::class.java))
     }

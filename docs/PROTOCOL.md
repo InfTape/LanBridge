@@ -4,7 +4,9 @@ Windows 是 TCP 服务端，默认端口 42831；Android 主动连接。一个�
 
 二维码内容为 `lanbridge://IPv4:42831/16位配对码`，使用中等级纠错及至少四模块留白，Win32 GDI 按整数像素绘制。切换电脑地址即刷新二维码。Android CameraX 提供相机亮度数据，ZXing 离线识别，只接受经过 IPv4、端口、配对码校验的 `lanbridge://` 信息，拒绝附加用户信息、查询和片段；识别成功后自动连接，不打开外部网页。二维码中的凭据与手动连接相同，不改变 LB01 传输格式。
 
-连接开始时 Windows 发送 20 字节：ASCII `LB01` + 随机 16 字节 salt。双方以大写 ASCII 配对码为密码，使用 PBKDF2-HMAC-SHA256（120000 次迭代，32 字节输出）导出 AES-256 密钥。配对码是每次 Windows 启动随机生成的 16 位十六进制字符串，不发送到网络，也不保存到 Android 偏好设置。
+连接开始时 Windows 发送 20 字节：ASCII `LB01` + 随机 16 字节 salt。双方以大写 ASCII 配对码为密码，使用 PBKDF2-HMAC-SHA256（120000 次迭代，32 字节输出）导出 AES-256 密钥。首次 Windows 启动生成随机 16 位十六进制凭据，并以当前用户 DPAPI 保存至 `%LOCALAPPDATA%/LanBridge/pairing.dat`，后续启动复用；“重置配对”时更换。Android 仅在加密 Hello 握手成功后保存绑定，使用不可导出的 Android Keystore AES-256 密钥及 GCM 认证加密；偏好设置只存密文，凭据不放入 Activity 保存状态。每次连接仍使用新的随机 salt、nonce 和序号。
+
+已绑定手机在打开应用、进入系统分享或临时掉线时自动连接，优先使用真实 Wi-Fi 网络。UDP 42832 发现请求为 `LBD1` + 16 字节随机挑战；Windows 回复为 `LBR1` + 原挑战 + uint16 大端 TCP 端口 + 32 字节 HMAC-SHA256。HMAC 密钥是配对凭据的大写 ASCII 字节，覆盖前 22 字节回复；手机使用常量时间摘要比较，仅接受匹配凭据、挑战及合法端口的回复，然后使用回复来源 IPv4 进行原有加密 TCP 握手。广播不包含配对凭据。发现失败时尝试上次地址，连续重连失败 30 次后暂停；下一次打开应用、点击重连或新的系统分享可再次尝试。主动断开会停止后台重试。
 
 每帧为：4 字节大端长度 + 随机 12 字节 nonce + AES-GCM 密文 + 16 字节 tag。明文为 1 字节 type + payload。长度范围 29–262173，payload 最多 262144 字节。AAD 是 1 字节方向（Android→Windows=0，Windows→Android=1）+ 8 字节大端序号，双方各自从 0 累加。方向与序号绑定，阻止跨方向反射及同一会话帧重放。连接之间采用新的 salt。
 
@@ -22,4 +24,4 @@ Windows 是 TCP 服务端，默认端口 42831；Android 主动连接。一个�
 
 Windows 使用随机 `.part` 临时文件、严格文件名检查、空间检查和不覆盖的原子重命名。Android 使用 MediaStore Downloads 的 `IS_PENDING`，验证完成后才公开文件。中断或错误时删除未完成文件；不提供断点续传。同名文件保留两份。单个文件上限为 100 GiB，实际还受两端磁盘可用空间限制。
 
-加密采用 Windows BCrypt 与 Android/JVM javax.crypto；不是 TLS。知道配对码即可访问本次 Windows 会话，配对码应只提供给要连接的手机。没有前向保密或设备公钥身份机制。这一版本适用于受信任的家庭或办公局域网。
+加密采用 Windows BCrypt 与 Android/JVM javax.crypto；不是 TLS。知道配对码即可连接此电脑，直至 Windows 重置配对，凭据应只提供给要连接的手机。手机“解除绑定”清除其本地保存内容，不撤销其他副本；Windows“重置配对”更换凭据，撤销所有旧绑定。没有前向保密或设备公钥身份机制。这一版本适用于受信任的家庭或办公局域网。
