@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- Same geometry and colors as Android res/drawable/ic_bridge.xml. -->
+  <rect width="108" height="108" rx="24" fill="#DBE4FF"/>
+  <path d="M26 40L79 40M69 30L79 40L69 50M82 68L29 68M39 58L29 68L39 78"
+        fill="none" stroke="#3455AD" stroke-width="8" stroke-linecap="round"/>
+</svg>

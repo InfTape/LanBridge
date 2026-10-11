@@ -1,2 +1,2 @@
 #include <windows.h>
-101 ICON "../assets/phone.ico"
+101 ICON "../assets/app.ico"

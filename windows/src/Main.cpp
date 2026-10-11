@@ -1,6 +1,7 @@
 #include "Bridge.h"
 #include "ShellTransfer.h"
 #include "Startup.h"
+#include "AppIcon.h"
 #include "ui/UiTypography.h"
 #include "ui/TitleBar.h"
 #include "ui/PopupMenu.h"
@@ -52,7 +53,8 @@ public:
     ~App() { if(server_) server_->Stop(); if(sender_.joinable()) sender_.join(); if(integration_.joinable()) integration_.join(); for(auto f:fonts_) DeleteObject(f); DeleteObject(background_); DeleteObject(card_); }
     int Run(HINSTANCE instance,int show,const shelltransfer::Paths& initial = {}) {
         folder_=bridge::ReceiveDirectory(); code_=bridge::RandomCode();
-        WNDCLASSEXW wc{sizeof(wc)}; wc.lpfnWndProc=Proc; wc.hInstance=instance; wc.hCursor=LoadCursorW(nullptr,IDC_ARROW); wc.hIcon=LoadIconW(nullptr,IDI_APPLICATION); wc.lpszClassName=L"LanBridgeWindow";
+        WNDCLASSEXW wc{sizeof(wc)}; wc.lpfnWndProc=Proc; wc.hInstance=instance; wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
+        wc.hIcon=LoadAppIcon(GetSystemMetricsForDpi(SM_CXICON,GetDpiForSystem())); wc.hIconSm=LoadAppIcon(GetSystemMetricsForDpi(SM_CXSMICON,GetDpiForSystem())); wc.lpszClassName=L"LanBridgeWindow";
         RegisterClassExW(&wc);
         RECT area{}; SystemParametersInfoW(SPI_GETWORKAREA,0,&area,0);
         int scale=GetDpiForSystem();
@@ -126,7 +128,7 @@ private:
         Control(L"STATIC",L"启动中…",Status);
         UpdateQr(); FontSetup(); Layout();
         BOOL dark=FALSE; DwmSetWindowAttribute(window_,20,&dark,sizeof(dark));
-        tray_.cbSize=sizeof(tray_); tray_.hWnd=window_; tray_.uID=1; tray_.uFlags=NIF_ICON|NIF_MESSAGE|NIF_TIP; tray_.uCallbackMessage=TrayMessage; tray_.hIcon=LoadIconW(nullptr,IDI_APPLICATION);
+        tray_.cbSize=sizeof(tray_); tray_.hWnd=window_; tray_.uID=1; tray_.uFlags=NIF_ICON|NIF_MESSAGE|NIF_TIP; tray_.uCallbackMessage=TrayMessage; tray_.hIcon=LoadAppIcon(GetSystemMetricsForDpi(SM_CXSMICON,dpi_));
         wcscpy_s(tray_.szTip,L"LanBridge · 局域网互传"); Shell_NotifyIconW(NIM_ADD,&tray_);
         tray_.uVersion=NOTIFYICON_VERSION_4; trayVersion4_=Shell_NotifyIconW(NIM_SETVERSION,&tray_)!=FALSE;
     }

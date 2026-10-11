@@ -1,6 +1,6 @@
 # LanBridge · Windows / Android 局域网互传
 
-桌面项目包含完整源码和可运行文件。Windows 当前版本 1.4.1，Android 版本 1.2.2。支持扫码配对、手机分享后自动发送，以及 Windows 11 第一层右键菜单“发送到手机”。
+桌面项目包含完整源码和可运行文件。Windows 当前版本 1.4.2，Android 版本 1.2.2。支持扫码配对、手机分享后自动发送，以及 Windows 11 第一层右键菜单“发送到手机”。
 
 - **Windows**：C++20，纯 Win32 API 窗口与标准控件，原生 DPI 缩放、托盘、文件对话框和拖放；网络使用 Winsock2，加密使用 BCrypt。界面参考 `native-screenshot-tool` 的中文原生控件设计。
 - **Android**：Kotlin + Jetpack Compose BOM 2026.09.00 + Material 3 Expressive 1.5.0-beta01，实际使用 `MaterialExpressiveTheme`、动态配色、Expressive 动效与加载组件，支持深色模式和宽屏双栏。Material 3 Expressive 当前使用 Beta API。
@@ -21,6 +21,8 @@
 Windows 接收目录为当前用户的 **下载/LanBridge**。右上角关闭按钮收起到托盘，仍继续接收；彻底退出使用托盘右键菜单。配对码每次启动重新生成。一次连接一台手机，多文件按顺序传输；文件夹请先压缩。连续接收多个文件时剪贴板保留最后一个文件，其余文件可在历史列表中重新复制。
 
 1.4.1 参考 `native-screenshot-tool` 的 Win32 自绘方式，将标题栏、托盘右键菜单、托盘悬停提示与普通控件统一为 Microsoft YaHei UI，启用 ClearType 并按所在屏幕 DPI 缩放；未连接局域网时的二维码占位文字也使用同一字体。标题栏保留拖动、双击最大化、边缘缩放和最小化/最大化/关闭操作；托盘菜单保留键盘操作与开机启动勾选状态。
+
+1.4.2 将 Android 应用的双向箭头图标复用于 Windows 程序文件、标题栏、任务栏、托盘、右键发送与菜单身份包；ICO 内含 16、20、24、32、40、48、64、96、128、256 像素版本，SVG 和 PNG 源素材位于 `windows/assets`。
 
 ## Windows 开机启动
 
