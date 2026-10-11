@@ -40,9 +40,17 @@ public:
         if(!items) return S_OK;
         DWORD count = 0; if(FAILED(items->GetCount(&count)) || !count || count > shelltransfer::MaxFiles) return S_OK;
         SFGAOF attributes = 0;
-        // The filesystem flag must apply to all items; the folder flag to any.
+        // Only real filesystem files can be sent. ZIP archives also have
+        // SFGAO_FOLDER, so determine directory status from the Win32 path.
         if(FAILED(items->GetAttributes(SIATTRIBFLAGS_AND,SFGAO_FILESYSTEM,&attributes)) || !(attributes & SFGAO_FILESYSTEM)) return S_OK;
-        if(FAILED(items->GetAttributes(SIATTRIBFLAGS_OR,SFGAO_FOLDER,&attributes)) || (attributes & SFGAO_FOLDER)) return S_OK;
+        for(DWORD i=0;i<count;i++) {
+            IShellItem* item = nullptr;
+            if(FAILED(items->GetItemAt(i,&item))) return S_OK;
+            PWSTR path = nullptr; auto result = item->GetDisplayName(SIGDN_FILESYSPATH,&path); item->Release();
+            DWORD fileAttributes = SUCCEEDED(result) && path ? GetFileAttributesW(path) : INVALID_FILE_ATTRIBUTES;
+            CoTaskMemFree(path);
+            if(fileAttributes == INVALID_FILE_ATTRIBUTES || (fileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return S_OK;
+        }
         *state = ECS_ENABLED; return S_OK;
     }
     HRESULT STDMETHODCALLTYPE Invoke(IShellItemArray* items, IBindCtx*) override {

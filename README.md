@@ -1,6 +1,6 @@
 # LanBridge · Windows / Android 局域网互传
 
-桌面项目包含完整源码和可运行文件。Windows 当前版本 1.4.3，Android 版本 1.2.2。支持扫码配对、手机分享后自动发送，以及 Windows 11 第一层右键菜单“发送到手机”。
+桌面项目包含完整源码和可运行文件。Windows 当前版本 1.4.4，Android 版本 1.2.2。支持扫码配对、手机分享后自动发送，以及 Windows 11 第一层右键菜单“发送到手机”。
 
 - **Windows**：C++20，纯 Win32 API 窗口与标准控件，原生 DPI 缩放、托盘、文件对话框和拖放；网络使用 Winsock2，加密使用 BCrypt。界面参考 `native-screenshot-tool` 的中文原生控件设计。
 - **Android**：Kotlin + Jetpack Compose BOM 2026.09.00 + Material 3 Expressive 1.5.0-beta01，实际使用 `MaterialExpressiveTheme`、动态配色、Expressive 动效与加载组件，支持深色模式和宽屏双栏。Material 3 Expressive 当前使用 Beta API。
@@ -25,6 +25,8 @@ Windows 接收目录为当前用户的 **下载/LanBridge**。右上角关闭按
 1.4.2 将 Android 应用的双向箭头图标复用于 Windows 程序文件、标题栏、任务栏、托盘、右键发送与菜单身份包；ICO 内含 16、20、24、32、40、48、64、96、128、256 像素版本，SVG 和 PNG 源素材位于 `windows/assets`。
 
 1.4.3 将托盘菜单和悬停提示调整为截图工具同样的 9pt 微软雅黑 UI。菜单采用相同的行高、左右文字边距与正常菜单宽度，较长文案仍自动扩展；“显示主窗口”“开机启动”使用简洁文案，勾选标记保持可见。主窗口的字号不受此调整影响。
+
+1.4.4 修复 ZIP 文件右键没有“发送到手机”：Windows 压缩包同时带有 Shell 文件夹属性，菜单现在按真实 Win32 文件属性判断。ZIP 文件与普通文件均可选择发送，真实目录和混合目录选择仍隐藏菜单。仅更新菜单组件，无需重启传输主程序。
 
 ## Windows 开机启动
 

@@ -1,6 +1,6 @@
 # 验证记录
 
-验证日期：2026-10-11。Windows 1.4.3，Android 1.2.2。本次将托盘菜单及提示调整为截图工具相同的 9pt 与紧凑尺寸；保留与 Android APK 统一的应用图标；保留参考 `native-screenshot-tool` 实现的统一标题栏、托盘菜单和提示字体；保留 1.4.0 开机启动设置与 1.3.1 的右键加载菜单断线修复。Android 真机分享结果来自 1.2.1，界面检查来自 1.2.2。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
+验证日期：2026-10-11。Windows 1.4.4，Android 1.2.2。本次修复 ZIP 被 Shell 文件夹属性误判而隐藏右键发送菜单，构建并更新菜单 DLL 与身份包，通过独立菜单选择测试及已注册 COM 测试；传输主程序未重启。以下其他集成结果保留自 1.4.3 及此前版本，本次未重跑需独占主程序的端到端用例。保留截图工具相同的 9pt 托盘设计、APK 应用图标、统一字体、开机启动设置与右键加载菜单断线修复。Android 真机分享结果来自 1.2.1，界面检查来自 1.2.2。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
 
 | 检查 | 结果 |
 | --- | --- |
@@ -9,10 +9,13 @@
 | 本机开机启动配置 | 已启用；通过正式程序勾选框配置当前用户 Run 值 `LanBridge`，实际值为 `"C:\Users\Admin\Desktop\LanBridge\LanBridge.exe" --startup`，勾选状态同步；未执行电脑重启，登录启动行为通过上述真实进程参数测试验证 |
 | 默认地址回归验证 | 通过；VPN `tun0`、VMware 与 Hyper-V 同时启用时，生产 `LocalAddresses()` 将真实 Wi-Fi `192.168.0.102` 排在第一位；虚拟网卡仅允许手动选择 |
 | BridgeIntegration | 通过；双向文本/文件、空文件、同名文件、心跳、坏摘要、错误配对码、目录穿越和中断清理 |
-| UiIntegration 剪贴板测试 | 本次通过；实际 Win32 窗口双向文本/文件、自动复制、历史重新复制；结束后恢复原剪贴板 |
+| UiIntegration 剪贴板测试 | 1.4.3 通过；实际 Win32 窗口双向文本/文件、自动复制、历史重新复制；结束后恢复原剪贴板 |
 | ShellIntegration | 通过；原生 IExplorerCommand、中文与多文件路径、格式损坏/相对路径/非法请求文件拒绝、文件夹隐藏、首次启动排队、已运行实例转交、连接后按序自动发送及 SHA-256 |
 | Windows 本地文件读取失败 | 通过；不存在的待发送文件报错后，原连接继续发送文本成功 |
-| Windows 11 菜单身份包 | MakeAppx 构建、Authenticode 签名验证及实际 Add-AppxPackage 注册通过；版本 1.4.3.0，外部目录绑定至桌面项目；随附公开证书，私钥未导出 |
+| Windows 11 菜单身份包 | MakeAppx 构建、Authenticode 签名验证及实际 Add-AppxPackage 注册通过；版本 1.4.4.0，外部目录绑定至桌面项目；随附公开证书，私钥未导出 |
+| 1.4.4 ZIP 回归 | 有效的空 ZIP 经真实 Windows Shell 解析，确认带有 SFGAO_FOLDER；原 DLL 复现 ZIP file state 失败，修复 DLL 的 ShellSelectionIntegration 通过；覆盖 ZIP 单选、ZIP 与普通文件多选，以及 ZIP 混合真实目录（目录名称也为 .zip）时隐藏菜单 |
+| 1.4.4 已注册菜单 | 更新身份包后，系统实际 CoCreateInstance 激活正式菜单 DLL，同一 ZIP 与目录回归通过；不调用 Invoke、不发送测试文件、不改写剪贴板 |
+| 1.4.4 更新保持手机连接 | 菜单更新及已注册 COM 检查前后，传输主进程 PID 15632 保持不变；同一手机 TCP 连接 192.168.0.100:34820、创建时间 14:59:32 均不变，无需重新配对 |
 | 已注册 Shell COM 激活（空闲） | 通过；Windows 实际激活已注册的 packaged COM surrogate，检查中文命令标题、手机图标、多文件可用状态与混合文件夹隐藏状态 |
 | 已连接时加载已注册菜单 | 通过；原生测试客户端先建立加密连接，再经系统 COM 注册激活菜单 30 次，每次释放后检查原主进程和同一连接心跳；随后经已注册 Invoke 发送两个文件，文件名、内容、SHA-256 全部一致；测试不改写剪贴板 |
 | 主程序身份隔离 | 通过；GetPackageFullName 验证传输进程无包身份，菜单仍由系统 packaged COM surrogate 激活。1.3.0 嵌入主程序的 MSIX 身份已移除 |

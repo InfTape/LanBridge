@@ -49,6 +49,16 @@ void CheckCommand(IExplorerCommand* command,const Paths& paths,const std::filesy
     EXPCMDSTATE state; Require(SUCCEEDED(command->GetState(items,FALSE,&state)) && state==ECS_ENABLED,"Multi-file state"); items->Release();
     items=Selection(Paths{paths.front(),folder});
     Require(SUCCEEDED(command->GetState(items,FALSE,&state)) && state==ECS_HIDDEN,"Mixed folder selection hidden"); items->Release();
+    auto archive=folder/L"中文 archive.zip";
+    items=Selection(Paths{archive});
+    SFGAOF attributes=0;
+    Require(SUCCEEDED(items->GetAttributes(SIATTRIBFLAGS_AND,SFGAO_FOLDER,&attributes)),"ZIP shell attributes");
+    std::cout<<"ZIP has SFGAO_FOLDER: "<<((attributes & SFGAO_FOLDER)!=0)<<std::endl;
+    Require(SUCCEEDED(command->GetState(items,FALSE,&state)) && state==ECS_ENABLED,"ZIP file state"); items->Release();
+    items=Selection(Paths{paths.front(),archive});
+    Require(SUCCEEDED(command->GetState(items,FALSE,&state)) && state==ECS_ENABLED,"ZIP and ordinary file state"); items->Release();
+    items=Selection(Paths{archive,folder/L"folder.zip"});
+    Require(SUCCEEDED(command->GetState(items,FALSE,&state)) && state==ECS_HIDDEN,"ZIP with real directory hidden"); items->Release();
     GUID id{}; Require(SUCCEEDED(command->GetCanonicalName(&id)) && id==CommandId,"Canonical command ID");
 }
 IExplorerCommand* RegisteredCommand() {
@@ -134,6 +144,10 @@ int wmain(int argc,wchar_t** argv) {
     try {
         Temporary temporary; auto a=temporary.path/L"中文 file & one.bin", b=temporary.path/L"second.bin";
         std::ofstream(a,std::ios::binary)<<"first payload"; std::ofstream(b,std::ios::binary)<<"second payload";
+        // A valid empty ZIP (end-of-central-directory record), not a renamed text file.
+        const char archiveBytes[22]={'P','K',5,6};
+        std::ofstream(temporary.path/L"中文 archive.zip",std::ios::binary).write(archiveBytes,sizeof(archiveBytes));
+        std::filesystem::create_directory(temporary.path/L"folder.zip");
         Paths paths{a,b}; auto bytes=shelltransfer::Encode(paths);
         Require(shelltransfer::Decode(bytes.data(),bytes.size())==paths,"Unicode multi-file IPC");
         Reject([&] { shelltransfer::Decode(bytes.data(),bytes.size()-1); });
@@ -148,6 +162,7 @@ int wmain(int argc,wchar_t** argv) {
         IExplorerCommand* command=nullptr; HMODULE library=nullptr;
         bool live=(argc==3 || argc==4) && wcscmp(argv[1],L"--registered-live")==0;
         bool registered=live || (argc==2 && wcscmp(argv[1],L"--registered")==0);
+        bool selectionOnly=argc==3 && wcscmp(argv[1],L"--selection-only")==0;
         if(live) {
             Require(!FindWindowW(L"LanBridgeWindow",nullptr),"Close running app before isolated registered test");
             Process app; StartApp(app,argv[2]);
@@ -179,7 +194,7 @@ int wmain(int argc,wchar_t** argv) {
             Require(SUCCEEDED(factory->CreateInstance(nullptr,IID_PPV_ARGS(&command))),"Explorer command"); factory->Release();
         }
         CheckCommand(command,paths,temporary.path);
-        if(!registered) {
+        if(!registered && !selectionOnly) {
             Require(!FindWindowW(L"LanBridgeWindow",nullptr),"Close running app before isolated shell test");
             Process app; request=shelltransfer::WriteRequest(Paths{a});
             auto launch=shelltransfer::QuoteArgument(argv[1])+L" --send-request "+shelltransfer::QuoteArgument(request.wstring()); STARTUPINFOW startup{sizeof(startup)};
@@ -199,7 +214,7 @@ int wmain(int argc,wchar_t** argv) {
             channel->Close();
         }
         command->Release(); if(library) FreeLibrary(library);
-        std::cout<<(registered?"PASS: registered Windows 11 packaged COM activation, title, icon, multi-file state":"PASS: shell command, malformed IPC rejection, cold share queue, warm single-instance forwarding, Unicode and multi-file transfers with SHA-256; clipboard untouched")<<std::endl;
+        std::cout<<(registered || selectionOnly?"PASS: shell menu title, icon, multi-file and ZIP state; real directories hidden; running app and clipboard untouched":"PASS: shell command, malformed IPC rejection, cold share queue, warm single-instance forwarding, Unicode and multi-file transfers with SHA-256; clipboard untouched")<<std::endl;
         WSACleanup(); CoUninitialize(); return 0;
     } catch(const std::exception& error) { std::cerr<<"FAIL: "<<error.what()<<std::endl; WSACleanup(); CoUninitialize(); return 1; }
 }
