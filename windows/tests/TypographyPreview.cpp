@@ -38,6 +38,23 @@ int wmain(int argc,wchar_t** argv) {
     INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_STANDARD_CLASSES}; InitCommonControlsEx(&controls);
     ULONG_PTR token=0; Gdiplus::GdiplusStartupInput input; Gdiplus::GdiplusStartup(&token,&input,nullptr);
     try {
+        // Capture either application's real tray popup without relaunching it.
+        if(argc==5 && std::wstring(argv[1])==L"--existing") {
+            Require(std::wstring(argv[2])==L"LanBridgeWindow" || std::wstring(argv[2])==L"NativeScreenshot.MainWindow","Supported application class");
+            auto window=FindWindowW(argv[2],argv[3]); Require(window!=nullptr,"Existing application window");
+            auto thread=GetWindowThreadProcessId(window,nullptr);
+            RECT area{}; SystemParametersInfoW(SPI_GETWORKAREA,0,&area,0);
+            POINT anchor{area.left+(area.right-area.left)/2,area.top+(area.bottom-area.top)/2};
+            if(std::wstring(argv[2])==L"LanBridgeWindow") PostMessageW(window,WM_APP+2,MAKELPARAM(anchor.x,anchor.y),MAKELPARAM(WM_CONTEXTMENU,1));
+            else PostMessageW(window,WM_CONTEXTMENU,0,MAKELPARAM(anchor.x,anchor.y));
+            for(int i=0;i<100 && !menuWindow;i++) { EnumThreadWindows(thread,FindMenu,0); if(!menuWindow) Sleep(50); }
+            if(!menuWindow) { PostMessageW(window,WM_CANCELMODE,0,0); throw std::runtime_error("Existing tray popup"); }
+            try { Sleep(150); Snapshot(menuWindow,argv[4]); }
+            catch(...) { PostMessageW(window,WM_CANCELMODE,0,0); throw; }
+            PostMessageW(window,WM_CANCELMODE,0,0);
+            std::cout<<"PASS: captured existing tray popup; application and connection remain running"<<std::endl;
+            Gdiplus::GdiplusShutdown(token); return 0;
+        }
         Require(argc==3 && !FindWindowW(L"LanBridgeWindow",nullptr),"Expected app and PNG paths, no active LanBridge");
         for(UINT dpi:{96u,144u,192u}) {
             auto font=ui::CreateUiFont(dpi); LOGFONTW value{};

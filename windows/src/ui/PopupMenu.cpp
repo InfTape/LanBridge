@@ -25,7 +25,8 @@ bool PopupMenu::Prepare(HWND owner,const POINT& anchor) {
     SetWindowPos(tooltip_,HWND_TOPMOST,anchor.x,anchor.y,0,0,SWP_NOSIZE|SWP_NOACTIVATE);
     UINT dpi=UiDpi(tooltip_);
     if(!font_ || dpi!=dpi_) {
-        HFONT replacement=CreateUiFont(dpi); if(!replacement) return false;
+        // native-screenshot-tool uses 9 pt (12 logical pixels), not the body UI size.
+        HFONT replacement=CreateUiFont(dpi,12); if(!replacement) return false;
         auto previous=font_; font_=replacement; dpi_=dpi;
         SendMessageW(tooltip_,WM_SETFONT,reinterpret_cast<WPARAM>(font_),TRUE);
         if(previous) DeleteObject(previous);
@@ -46,8 +47,6 @@ UINT PopupMenu::Track(HMENU menu,HWND owner,const POINT& anchor) {
         item.dwItemData=reinterpret_cast<ULONG_PTR>(label.c_str()); item.dwTypeData=label.data();
         SetMenuItemInfoW(menu,i,TRUE,&item);
     }
-    MENUINFO info{sizeof(info)}; info.fMask=MIM_STYLE;
-    if(GetMenuInfo(menu,&info)) { info.dwStyle|=MNS_NOCHECK; SetMenuInfo(menu,&info); }
     SetForegroundWindow(owner); open_=true;
     UINT command=TrackPopupMenu(menu,TPM_RIGHTBUTTON|TPM_RETURNCMD,anchor.x,anchor.y,0,owner,nullptr);
     open_=false; PostMessageW(owner,WM_NULL,0,0); return command;
@@ -57,7 +56,8 @@ bool PopupMenu::Measure(MEASUREITEMSTRUCT& item) const {
     auto text=reinterpret_cast<const wchar_t*>(item.itemData); HDC dc=GetDC(owner_); if(!dc) return false;
     auto previous=SelectObject(dc,font_); SIZE size{}; GetTextExtentPoint32W(dc,text,static_cast<int>(wcslen(text)),&size);
     SelectObject(dc,previous); ReleaseDC(owner_,dc);
-    item.itemWidth=size.cx+MulDiv(52,dpi_,96);
+    // Match the reference tray's normal 124-DIP content width, expanding for longer text.
+    item.itemWidth=std::max(static_cast<int>(size.cx)+MulDiv(40,dpi_,96),MulDiv(124,dpi_,96));
     item.itemHeight=std::max(static_cast<int>(size.cy)+MulDiv(10,dpi_,96),MulDiv(32,dpi_,96)); return true;
 }
 bool PopupMenu::Draw(const DRAWITEMSTRUCT& item) const {
@@ -67,12 +67,12 @@ bool PopupMenu::Draw(const DRAWITEMSTRUCT& item) const {
     FillRect(item.hDC,&item.rcItem,GetSysColorBrush(selected?COLOR_HIGHLIGHT:COLOR_MENU));
     COLORREF color=GetSysColor(disabled?COLOR_GRAYTEXT:selected?COLOR_HIGHLIGHTTEXT:COLOR_MENUTEXT);
     SelectObject(item.hDC,font_); SetBkMode(item.hDC,TRANSPARENT); SetTextColor(item.hDC,color);
-    RECT text=item.rcItem; text.left+=MulDiv(32,dpi_,96); text.right-=MulDiv(12,dpi_,96);
+    RECT text=item.rcItem; text.left+=MulDiv(18,dpi_,96); text.right-=MulDiv(12,dpi_,96);
     DrawTextW(item.hDC,reinterpret_cast<const wchar_t*>(item.itemData),-1,&text,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
     if(item.itemState&ODS_CHECKED) {
-        int x=item.rcItem.left+MulDiv(10,dpi_,96),y=(item.rcItem.top+item.rcItem.bottom)/2;
+        int x=item.rcItem.left+MulDiv(4,dpi_,96),y=(item.rcItem.top+item.rcItem.bottom)/2;
         HPEN pen=CreatePen(PS_SOLID,std::max(1,MulDiv(2,dpi_,96)),color); auto old=SelectObject(item.hDC,pen);
-        MoveToEx(item.hDC,x,y,nullptr); LineTo(item.hDC,x+MulDiv(4,dpi_,96),y+MulDiv(4,dpi_,96)); LineTo(item.hDC,x+MulDiv(11,dpi_,96),y-MulDiv(4,dpi_,96));
+        MoveToEx(item.hDC,x,y,nullptr); LineTo(item.hDC,x+MulDiv(3,dpi_,96),y+MulDiv(3,dpi_,96)); LineTo(item.hDC,x+MulDiv(8,dpi_,96),y-MulDiv(3,dpi_,96));
         SelectObject(item.hDC,old); DeleteObject(pen);
     }
     RestoreDC(item.hDC,saved); return true;

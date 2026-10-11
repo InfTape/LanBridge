@@ -385,11 +385,11 @@ private:
                     NOTIFYICONIDENTIFIER icon{sizeof(icon)}; icon.hWnd=h; icon.uID=1; RECT rect{};
                     if(SUCCEEDED(Shell_NotifyIconGetRect(&icon,&rect))) p={rect.left,rect.top}; else GetCursorPos(&p);
                 }
-                auto menu=CreatePopupMenu(); AppendMenuW(menu,MF_STRING,1,L"显示 LanBridge");
+                auto menu=CreatePopupMenu(); AppendMenuW(menu,MF_STRING,1,L"显示主窗口");
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
                 AppendMenuW(menu,MF_STRING|(app->integrating_?MF_GRAYED:0),EnableMenu,L"启用右键发送");
                 AppendMenuW(menu,MF_STRING|(app->integrating_?MF_GRAYED:0),DisableMenu,L"移除右键发送");
-                AppendMenuW(menu,MF_STRING|(app->startupEnabled_?MF_CHECKED:0),Startup,L"开机启动（收至托盘）");
+                AppendMenuW(menu,MF_STRING|(app->startupEnabled_?MF_CHECKED:0),Startup,L"开机启动");
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr); AppendMenuW(menu,MF_STRING,Exit,L"退出");
                 auto id=app->popup_.Track(menu,h,p); DestroyMenu(menu);
                 if(id==1) { ShowWindow(h,SW_RESTORE); SetForegroundWindow(h); }

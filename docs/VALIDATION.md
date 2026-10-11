@@ -1,6 +1,6 @@
 # 验证记录
 
-验证日期：2026-10-11。Windows 1.4.2，Android 1.2.2。本次将应用图标与 Android APK 统一；保留参考 `native-screenshot-tool` 实现的统一标题栏、托盘菜单和提示字体；保留 1.4.0 开机启动设置与 1.3.1 的右键加载菜单断线修复。Android 真机分享结果来自 1.2.1，界面检查来自 1.2.2。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
+验证日期：2026-10-11。Windows 1.4.3，Android 1.2.2。本次将托盘菜单及提示调整为截图工具相同的 9pt 与紧凑尺寸；保留与 Android APK 统一的应用图标；保留参考 `native-screenshot-tool` 实现的统一标题栏、托盘菜单和提示字体；保留 1.4.0 开机启动设置与 1.3.1 的右键加载菜单断线修复。Android 真机分享结果来自 1.2.1，界面检查来自 1.2.2。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
 
 | 检查 | 结果 |
 | --- | --- |
@@ -12,7 +12,7 @@
 | UiIntegration 剪贴板测试 | 本次通过；实际 Win32 窗口双向文本/文件、自动复制、历史重新复制；结束后恢复原剪贴板 |
 | ShellIntegration | 通过；原生 IExplorerCommand、中文与多文件路径、格式损坏/相对路径/非法请求文件拒绝、文件夹隐藏、首次启动排队、已运行实例转交、连接后按序自动发送及 SHA-256 |
 | Windows 本地文件读取失败 | 通过；不存在的待发送文件报错后，原连接继续发送文本成功 |
-| Windows 11 菜单身份包 | MakeAppx 构建、Authenticode 签名验证及实际 Add-AppxPackage 注册通过；版本 1.4.2.0，外部目录绑定至桌面项目；随附公开证书，私钥未导出 |
+| Windows 11 菜单身份包 | MakeAppx 构建、Authenticode 签名验证及实际 Add-AppxPackage 注册通过；版本 1.4.3.0，外部目录绑定至桌面项目；随附公开证书，私钥未导出 |
 | 已注册 Shell COM 激活（空闲） | 通过；Windows 实际激活已注册的 packaged COM surrogate，检查中文命令标题、手机图标、多文件可用状态与混合文件夹隐藏状态 |
 | 已连接时加载已注册菜单 | 通过；原生测试客户端先建立加密连接，再经系统 COM 注册激活菜单 30 次，每次释放后检查原主进程和同一连接心跳；随后经已注册 Invoke 发送两个文件，文件名、内容、SHA-256 全部一致；测试不改写剪贴板 |
 | 主程序身份隔离 | 通过；GetPackageFullName 验证传输进程无包身份，菜单仍由系统 packaged COM surrogate 激活。1.3.0 嵌入主程序的 MSIX 身份已移除 |
@@ -32,6 +32,7 @@
 | Android SharedFlowDeviceTest | 测试 APK 构建通过；当前手机系统拒绝安装测试 APK（INSTALL_FAILED_USER_RESTRICTED），尚未运行该完整测试 |
 | APK apksigner verify | 通过，APK Signature Scheme v2 |
 | 1.4.2 应用图标 | 通过；Win32 从实际 EXE 资源加载 16～256 像素的 10 种尺寸；正式主窗口的大小图标均已设置；实际标题栏截图与 EXE 图标渲染已检查；四项 Windows 集成测试和已注册菜单连接回归通过 |
+| 1.4.3 托盘尺寸 | 通过；TypographyPreview 捕获两个正式程序的实际菜单，当前屏幕均为 308 像素宽，字号、行高与文字边距一致；LanBridge 开机启动勾选未遮挡文字。四项 Windows 集成测试通过，最终菜单文案和宽度调整后再次通过 StartupIntegration 的连接、菜单与启动项检查 |
 | Windows 界面 | 已检查实际 Win32 渲染图，中文文字与控件布局可见 |
 | 1.4.1 标题栏字体与操作 | 通过；实际标题栏按钮的字体为 Microsoft YaHei UI；拖动区域返回 HTCAPTION；真实按钮执行最大化、还原、最小化及关闭到托盘后，原加密连接心跳保持正常 |
 | 1.4.1 托盘菜单 | 通过；真实托盘弹出菜单显示期间及收起后，原加密连接心跳保持正常；TypographyPreview 捕获实际菜单并检查渲染图，中文文字与开机启动勾选标记正常 |
