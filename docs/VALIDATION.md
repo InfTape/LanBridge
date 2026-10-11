@@ -1,16 +1,18 @@
 # 验证记录
 
-验证日期：2026-10-11。Windows 1.3.1，Android 1.2.2。本次修复 Windows 11 右键加载菜单造成主程序退出、手机断线的问题；Android 真机分享结果来自 1.2.1，界面检查来自 1.2.2。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
+验证日期：2026-10-11。Windows 1.4.0，Android 1.2.2。本次增加与 `native-screenshot-tool` 同方式的当前用户开机启动设置；保留 1.3.1 的右键加载菜单断线修复。Android 真机分享结果来自 1.2.1，界面检查来自 1.2.2。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
 
 | 检查 | 结果 |
 | --- | --- |
 | Windows Release 构建 | 通过；静态 C++ 运行库；只依赖系统 DLL |
+| StartupIntegration | 通过；独立测试键验证带空格和中文路径的命令、反复启用/取消和保留其他启动项；实际窗口以 `--startup` 保持隐藏并建立加密连接，重复自启动保持原连接，手动启动显示同一窗口；勾选框实际写入/删除 Run 值，结束后恢复原启动项；不改写剪贴板 |
+| 本机开机启动配置 | 已启用；通过正式程序勾选框配置当前用户 Run 值 `LanBridge`，实际值为 `"C:\Users\Admin\Desktop\LanBridge\LanBridge.exe" --startup`，勾选状态同步；未执行电脑重启，登录启动行为通过上述真实进程参数测试验证 |
 | 默认地址回归验证 | 通过；VPN `tun0`、VMware 与 Hyper-V 同时启用时，生产 `LocalAddresses()` 将真实 Wi-Fi `192.168.0.102` 排在第一位；虚拟网卡仅允许手动选择 |
 | BridgeIntegration | 通过；双向文本/文件、空文件、同名文件、心跳、坏摘要、错误配对码、目录穿越和中断清理 |
 | UiIntegration 剪贴板测试 | 本次通过；实际 Win32 窗口双向文本/文件、自动复制、历史重新复制；结束后恢复原剪贴板 |
 | ShellIntegration | 通过；原生 IExplorerCommand、中文与多文件路径、格式损坏/相对路径/非法请求文件拒绝、文件夹隐藏、首次启动排队、已运行实例转交、连接后按序自动发送及 SHA-256 |
 | Windows 本地文件读取失败 | 通过；不存在的待发送文件报错后，原连接继续发送文本成功 |
-| Windows 11 菜单身份包 | MakeAppx 构建、Authenticode 签名验证及实际 Add-AppxPackage 注册通过；版本 1.3.1.0，外部目录绑定至桌面项目；随附公开证书，私钥未导出 |
+| Windows 11 菜单身份包 | MakeAppx 构建、Authenticode 签名验证及实际 Add-AppxPackage 注册通过；版本 1.4.0.0，外部目录绑定至桌面项目；随附公开证书，私钥未导出 |
 | 已注册 Shell COM 激活（空闲） | 通过；Windows 实际激活已注册的 packaged COM surrogate，检查中文命令标题、手机图标、多文件可用状态与混合文件夹隐藏状态 |
 | 已连接时加载已注册菜单 | 通过；原生测试客户端先建立加密连接，再经系统 COM 注册激活菜单 30 次，每次释放后检查原主进程和同一连接心跳；随后经已注册 Invoke 发送两个文件，文件名、内容、SHA-256 全部一致；测试不改写剪贴板 |
 | 主程序身份隔离 | 通过；GetPackageFullName 验证传输进程无包身份，菜单仍由系统 packaged COM surrogate 激活。1.3.0 嵌入主程序的 MSIX 身份已移除 |

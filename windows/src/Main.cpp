@@ -1,5 +1,6 @@
 #include "Bridge.h"
 #include "ShellTransfer.h"
+#include "Startup.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <dwmapi.h>
@@ -14,7 +15,8 @@
 
 namespace {
 constexpr UINT EventsMessage=WM_APP+1,TrayMessage=WM_APP+2;
-enum ControlId { Ip=100,Code,CopyLink,Disconnect,Text,SendText,SendClipboard,SendFile,OpenFolder,History,Recopy,Clear,Progress,Status,EnableMenu,DisableMenu,Qr=200,Exit=900 };
+const UINT TaskbarCreatedMessage=RegisterWindowMessageW(L"TaskbarCreated");
+enum ControlId { Ip=100,Code,CopyLink,Disconnect,Text,SendText,SendClipboard,SendFile,OpenFolder,History,Recopy,Clear,Progress,Status,EnableMenu,DisableMenu,Startup,Qr=200,Exit=900 };
 struct Record { bool file; std::wstring text; std::filesystem::path path; };
 class App {
     HWND window_=nullptr;
@@ -39,6 +41,7 @@ class App {
     bool exiting_=false;
     bool receiving_=false;
     bool senderProgress_=false;
+    bool startupEnabled_=false;
 public:
     ~App() { if(server_) server_->Stop(); if(sender_.joinable()) sender_.join(); if(integration_.joinable()) integration_.join(); for(auto f:fonts_) DeleteObject(f); DeleteObject(background_); DeleteObject(card_); }
     int Run(HINSTANCE instance,int show,const shelltransfer::Paths& initial = {}) {
@@ -80,6 +83,10 @@ private:
         Control(L"STATIC",L"同一网络，随手互传。",11);
         Control(L"BUTTON",L"启用右键发送",EnableMenu,WS_TABSTOP);
         Control(L"BUTTON",L"移除右键发送",DisableMenu,WS_TABSTOP);
+        Control(L"BUTTON",L"开机启动（默认收至托盘）",Startup,BS_AUTOCHECKBOX|WS_TABSTOP);
+        try { startupEnabled_=startup::IsEnabled(startup::ExecutablePath()); }
+        catch(const std::exception& e) { Queue({bridge::Event::Error,bridge::Wide(e.what())}); }
+        SendMessageW(Item(Startup),BM_SETCHECK,startupEnabled_?BST_CHECKED:BST_UNCHECKED,0);
         Control(L"STATIC",L"01   扫码连接",12);
         Control(L"STATIC",L"配对二维码",Qr,SS_OWNERDRAW);
         Control(L"STATIC",L"电脑地址",13);
@@ -121,6 +128,7 @@ private:
         int qrEdge=std::clamp(h-448,208,246),afterQr=151+qrEdge;
         Place(10,32,22,300,38); Place(11,34,63,500,26);
         Place(EnableMenu,w-360,32,155,33); Place(DisableMenu,w-195,32,155,33);
+        Place(Startup,w-360,68,310,24);
         Place(12,40,111,246,28); Place(Qr,40+(246-qrEdge)/2,151,qrEdge,qrEdge);
         Place(15,40,afterQr+5,246,28);
         Place(13,40,afterQr+42,80,25); Place(Ip,124,afterQr+38,162,240);
@@ -275,6 +283,17 @@ private:
         case Disconnect: server_->Disconnect(); break;
         case EnableMenu: Integration(true); break;
         case DisableMenu: Integration(false); break;
+        case Startup: {
+            bool enabled=SendMessageW(Item(Startup),BM_GETCHECK,0,0)==BST_CHECKED;
+            try {
+                startup::SetEnabled(enabled,startup::ExecutablePath()); startupEnabled_=enabled;
+                StatusText(enabled?L"已开启开机启动 · 登录 Windows 后默认收至托盘":L"已关闭开机启动");
+            } catch(const std::exception& e) {
+                SendMessageW(Item(Startup),BM_SETCHECK,startupEnabled_?BST_CHECKED:BST_UNCHECKED,0);
+                StatusText(bridge::Wide(e.what()));
+            }
+            break;
+        }
         case SendText: { auto text=Value(Text); Send([this,text] { server_->SendText(text); }); break; }
         case SendClipboard: {
             auto files=bridge::ReadFiles(window_);
@@ -305,6 +324,7 @@ private:
         auto* app=reinterpret_cast<App*>(GetWindowLongPtrW(h,GWLP_USERDATA));
         if(m==WM_NCCREATE) { app=static_cast<App*>(reinterpret_cast<CREATESTRUCTW*>(l)->lpCreateParams); app->window_=h; SetWindowLongPtrW(h,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(app)); }
         if(!app) return DefWindowProcW(h,m,w,l);
+        if(TaskbarCreatedMessage && m==TaskbarCreatedMessage) { Shell_NotifyIconW(NIM_ADD,&app->tray_); return 0; }
         switch(m) {
         case WM_CREATE: app->Create(); return 0;
         case WM_SIZE: if(w!=SIZE_MINIMIZED && !app->fonts_.empty()) app->Layout(); return 0;
@@ -333,9 +353,14 @@ private:
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
                 AppendMenuW(menu,MF_STRING|(app->integrating_?MF_GRAYED:0),EnableMenu,L"启用右键发送");
                 AppendMenuW(menu,MF_STRING|(app->integrating_?MF_GRAYED:0),DisableMenu,L"移除右键发送");
+                AppendMenuW(menu,MF_STRING|(app->startupEnabled_?MF_CHECKED:0),Startup,L"开机启动（收至托盘）");
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr); AppendMenuW(menu,MF_STRING,Exit,L"退出"); POINT p; GetCursorPos(&p); SetForegroundWindow(h);
                 auto id=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,p.x,p.y,0,h,nullptr); DestroyMenu(menu);
-                if(id==1) { ShowWindow(h,SW_RESTORE); SetForegroundWindow(h); } else if(id) app->Command(id);
+                if(id==1) { ShowWindow(h,SW_RESTORE); SetForegroundWindow(h); }
+                else if(id) {
+                    if(id==Startup) SendMessageW(app->Item(Startup),BM_SETCHECK,app->startupEnabled_?BST_UNCHECKED:BST_CHECKED,0);
+                    app->Command(id);
+                }
             } return 0;
         }
         case WM_CLOSE: ShowWindow(h,SW_HIDE); app->StatusText(L"已收起到托盘，继续等待接收"); return 0;
@@ -344,6 +369,11 @@ private:
         case WM_CTLCOLORSTATIC: {
             auto dc=reinterpret_cast<HDC>(w); SetTextColor(dc,RGB(36,47,65)); SetBkMode(dc,TRANSPARENT);
             int id=GetDlgCtrlID(reinterpret_cast<HWND>(l)); return reinterpret_cast<LRESULT>(id==10 || id==11 || id==Status?app->background_:app->card_);
+        }
+        case WM_CTLCOLORBTN: {
+            if(GetDlgCtrlID(reinterpret_cast<HWND>(l))!=Startup) break;
+            SetTextColor(reinterpret_cast<HDC>(w),RGB(36,47,65)); SetBkMode(reinterpret_cast<HDC>(w),TRANSPARENT);
+            return reinterpret_cast<LRESULT>(app->background_);
         }
         case WM_ERASEBKGND: return 1;
         case WM_PRINTCLIENT: app->Paint(reinterpret_cast<HDC>(w)); return 0;
@@ -358,10 +388,12 @@ private:
 }
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
     shelltransfer::Paths initial;
+    bool startupLaunch=false;
     try {
         int argc=0; auto argv=CommandLineToArgvW(GetCommandLineW(),&argc);
         if(!argv) return 1;
-        bool valid=argc==1 || (argc==3 && wcscmp(argv[1],L"--send-request")==0);
+        startupLaunch=argc==2 && CompareStringOrdinal(argv[1],-1,L"--startup",-1,TRUE)==CSTR_EQUAL;
+        bool valid=argc==1 || startupLaunch || (argc==3 && wcscmp(argv[1],L"--send-request")==0);
         std::filesystem::path request=argc==3?argv[2]:L""; LocalFree(argv);
         if(!valid) throw std::runtime_error("Invalid command line");
         if(!request.empty()) initial=shelltransfer::ReadRequest(request);
@@ -373,12 +405,12 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
         if(!initial.empty()) {
             try { accepted=h && shelltransfer::Forward(h,initial); } catch(...) { accepted=false; }
             if(!accepted) MessageBoxW(nullptr,L"无法将文件交给正在运行的 LanBridge。请确认运行的是新版程序，或退出旧版后重试。",L"LanBridge",MB_ICONERROR);
-        } else if(h) { ShowWindow(h,SW_RESTORE); SetForegroundWindow(h); }
+        } else if(h && !startupLaunch) { ShowWindow(h,SW_RESTORE); SetForegroundWindow(h); }
         CloseHandle(mutex); return accepted?0:1;
     }
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED); INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_STANDARD_CLASSES|ICC_PROGRESS_CLASS}; InitCommonControlsEx(&controls);
     int result=1;
-    try { App app; result=app.Run(instance,show,initial); } catch(const std::exception& e) { MessageBoxW(nullptr,bridge::Wide(e.what()).c_str(),L"LanBridge",MB_ICONERROR); }
+    try { App app; result=app.Run(instance,startupLaunch?SW_HIDE:show,initial); } catch(const std::exception& e) { MessageBoxW(nullptr,bridge::Wide(e.what()).c_str(),L"LanBridge",MB_ICONERROR); }
     CoUninitialize(); if(mutex) CloseHandle(mutex); return result;
 }
