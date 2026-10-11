@@ -1,9 +1,13 @@
 # 验证记录
 
-验证日期：2026-10-12。Windows 1.5.0，Android 1.3.0。本次实现首次扫码绑定、凭据安全保存、自动发现已绑定电脑、打开应用/系统分享时重连及临时断线重试。Windows 七项集成测试全部通过，另经已注册菜单进行保持连接回归；Android 构建、Lint、绑定加密及跨端发现与 Wire 互通通过。旧 Windows 已无手机连接时才退出更新，未中断文件传输。用户选择自行安装 APK，当前没有 ADB 设备，本次未进行 Android 真机安装与自动重连操作验证；下列 Android 真机记录来自 1.2.1/1.2.2。保留截图工具托盘设计、应用图标、统一字体、开机启动及 ZIP/右键断线修复。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
+验证日期：2026-10-12。Windows 1.5.0，Android 1.3.1。保留首次扫码绑定与自动重连，本次通过 ADB 抓到 1.3.0 的两段故障：Xiaomi Android 16 拒绝 Network.bindSocket（EPERM），连接立即失败后在前台服务尚未完成启动时 stopService，导致 ForegroundServiceDidNotStartInTimeException。1.3.1 为 TCP/UDP 创建新的默认路由 socket，并以服务前台启动回调协调连接与取消。已更新安装到 2510DRK44C / API 36；用户扫码成功，实际界面显示已记住绑定；强制结束应用后重新启动，新进程自动恢复加密连接，无需扫码。构建、Lint 和 27 项 JVM 测试通过（1 项外部二维码 fixture 用例跳过），包含实际 Windows TCP/UDP 互通。Windows 本次未改动、未重启，原 1.5.0 七项集成测试记录保留。保留截图工具托盘设计、应用图标、统一字体、开机启动及 ZIP/右键断线修复。Windows x64；MSVC 19.44；JDK 21；Gradle 9.3.1；AGP 9.1.1。
 
 | 检查 | 结果 |
 | --- | --- |
+| Android 1.3.1 网卡限制兼容 | SocketRoutingTest 4 tests 通过；模拟 TCP EPERM 与 UDP 权限拒绝，确认关闭失败 socket、创建新 socket 后实际本地 TCP/UDP 通信成功，保留成功绑定并继续抛出无关程序错误；真机扫码与自动重连均记录绑定拒绝后的正常连接 |
+| Android 1.3.1 服务启动顺序 | ForegroundStartGateTest 4 tests 通过；覆盖服务确认前取消、连接立即失败、旧连接回调与快速替换，以及乱序回调；网络任务仅在 startForeground 完成的 onStartCommand 回调后启动，取消须等待所有已请求启动得到确认；真机 dumpsys 显示 isForeground=true，扫码与进程重建期间未出现新闪退 |
+| Android 1.3.1 真机绑定与重连 | ADB 覆盖安装 versionCode 7 成功；用户扫码后界面显示“已连接 Windows · 已记住绑定”；确认加密绑定文件存在；am force-stop 后 am start 产生新 PID，自动连接同一 Windows 进程，界面再次显示已记住绑定，连接保持超过多个 15 秒心跳周期；未修改剪贴板 |
+| Android 1.3.1 构建与互通 | assembleDebug、lintDebug、testDebugUnitTest 通过；Lint 0 errors / 13 warnings；27 tests，0 failures，1 skipped，实际 Windows Wire 和 UDP fixture 均运行；apksigner v2 校验及 ADB 覆盖安装成功 |
 | Windows Release 构建 | 通过；静态 C++ 运行库；只依赖系统 DLL |
 | 1.5.0 PairingIntegration | 通过；实际当前用户 DPAPI 保存/读取，重复启动复用同一凭据，磁盘内容无明文配对码，重置后新凭据可读取，损坏存储拒绝且不静默换码；跨端 HMAC 向量及实际 UDP 发现应答通过 |
 | 1.5.0 RememberedDesktopIntegration | 通过；实际 Win32 主程序以隐藏启动模式建立加密连接并交换心跳，正常退出再启动后配对码保持不变，用首次缓存的凭据直接再次握手并交换心跳；不读写剪贴板 |
@@ -39,7 +43,7 @@
 | 实际分享自动复制 | 通过；Win32 测试读取 CF_HDROP，确认是本次分享文件；执行前备份并在结束后恢复原剪贴板 |
 | 不可读取文件后继续分享 | 通过；实际向应用分享不存在的 content URI，界面显示文件不可读取但仍连接；同一 TCP 连接下再次分享有效文件成功并自动复制 |
 | Android SharedFlowDeviceTest | 测试 APK 构建通过；当前手机系统拒绝安装测试 APK（INSTALL_FAILED_USER_RESTRICTED），尚未运行该完整测试 |
-| APK apksigner verify | 通过，APK Signature Scheme v2；1.3.0 与旧 APK 签名证书 SHA-256 相同，可覆盖更新 |
+| APK apksigner verify | 通过，APK Signature Scheme v2；1.3.1 可覆盖安装旧 APK（versionCode 7） |
 | 1.4.2 应用图标 | 通过；Win32 从实际 EXE 资源加载 16～256 像素的 10 种尺寸；正式主窗口的大小图标均已设置；实际标题栏截图与 EXE 图标渲染已检查；四项 Windows 集成测试和已注册菜单连接回归通过 |
 | 1.4.3 托盘尺寸 | 通过；TypographyPreview 捕获两个正式程序的实际菜单，当前屏幕均为 308 像素宽，字号、行高与文字边距一致；LanBridge 开机启动勾选未遮挡文字。四项 Windows 集成测试通过，最终菜单文案和宽度调整后再次通过 StartupIntegration 的连接、菜单与启动项检查 |
 | Windows 界面 | 已检查实际 Win32 渲染图，中文文字与控件布局可见 |
@@ -55,7 +59,7 @@ QrDecoderTest 使用生产 `QrDecoder.kt`，识别 Win32 GDI 实际绘制的二�
 
 已通过 ADB 将 1.2.1 更新安装到 Android 16 / API 36 设备（型号 2510DRK44C），检查了实际界面。设备禁止 ADB 模拟点击及测试 APK 安装，因此完整 instrumentation 测试未运行；本次改用正式应用的实际分享 Intent 及 Win32 剪贴板检查完成上述单文件与错误恢复验证。JVM Wire / QR 互通测试需带对应 fixture 执行；普通单元测试命令会跳过这两项外部集成用例。
 
-**尚未完整验证**：Android 16 真机的相机权限拒绝/恢复、文件选择器、接收时 MediaStore 保存、通知/前台服务、Wi-Fi 大文件与多文件传输及厂商后台省电行为。上述实际单文件测试不能替代全部端到端场景。
+**尚未完整验证**：Android 16 真机的相机权限拒绝/恢复、文件选择器、接收时 MediaStore 保存、通知权限拒绝/前台服务六小时限额、Wi-Fi 地址变化、大文件与多文件传输及厂商后台省电行为。已验证扫码、前台服务正常启动和进程重建后的自动重连；上述验证不能替代全部端到端场景。
 
 Windows 测试使用临时文件；UI 剪贴板测试仅在可完整备份原剪贴板时执行，否则报告跳过。二维码渲染测试无需改写剪贴板。未修改系统防火墙规则。
 

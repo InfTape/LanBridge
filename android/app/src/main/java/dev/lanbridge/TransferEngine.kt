@@ -49,6 +49,11 @@ class TransferEngine(private val app: Application) {
     private var heartbeat: Job? = null
     private var sendJob: Job? = null
     private var connectionJob: Job? = null
+    private data class ConnectionRequest(val id: Long, val pairing: Pairing, val automatic: Boolean)
+    private val serviceStarts = ForegroundStartGate()
+    private var pendingConnection: ConnectionRequest? = null
+    private var foregroundService: TransferService? = null
+    private var foregroundStartId = 0
     private val savedPairing = RememberedPairing(app)
     private val discovery = PairingDiscovery(app)
     @Volatile private var trustedPairing = runCatching { savedPairing.load() }.getOrNull()
@@ -93,14 +98,43 @@ class TransferEngine(private val app: Application) {
             mutable.update { it.copy(remembered = false, status = "已解除绑定，首次连接请扫码") }
         } catch(e: Exception) { report("无法解除绑定：${e.message}") }
     }
-    private fun connectPair(initial: Pairing, automatic: Boolean) {
+    @Synchronized private fun connectPair(initial: Pairing, automatic: Boolean) {
         disconnect(false)
         paused = false
         val id = generation.incrementAndGet()
         sendDisconnectReason = null
         mutable.update { it.copy(connecting = true, status = if(automatic) "正在寻找已绑定电脑…" else "正在连接 ${initial.host}…", progress = null) }
-        try { app.startForegroundService(Intent(app, TransferService::class.java)) }
-        catch(e: Exception) { mutable.update { it.copy(connecting = false, status = "无法启动传输服务：${e.message}") }; return }
+        pendingConnection = ConnectionRequest(id, initial, automatic)
+        serviceStarts.request(id)
+        try { app.startForegroundService(Intent(app, TransferService::class.java).putExtra("generation", id)) }
+        catch(e: Exception) {
+            serviceStarts.cancel(); serviceStarts.arrive(id); pendingConnection = null
+            stopReadyService()
+            mutable.update { it.copy(connecting = false, status = "无法启动传输服务：${e.message}") }
+        }
+    }
+    @Synchronized internal fun serviceReady(service: TransferService, startId: Int, id: Long) {
+        foregroundService = service; foregroundStartId = startId
+        when(serviceStarts.arrive(id)) {
+            ForegroundStartGate.Arrival.START -> {
+                val request = pendingConnection?.takeIf { it.id == id } ?: return
+                pendingConnection = null
+                launchConnection(request)
+            }
+            ForegroundStartGate.Arrival.STOP -> stopReadyService()
+            ForegroundStartGate.Arrival.WAIT -> Unit
+        }
+    }
+    private fun stopReadyService() {
+        if(serviceStarts.canStop) foregroundService?.stopSelfResult(foregroundStartId)
+    }
+    @Synchronized internal fun serviceDestroyed(service: TransferService) {
+        if(foregroundService !== service) return
+        foregroundService = null
+        if(!serviceStarts.hasPending) disconnect(false)
+    }
+    private fun launchConnection(request: ConnectionRequest) {
+        val (id, initial, automatic) = request
         connectionJob = scope.launch {
             var pairing = initial
             var mayRetry = automatic
@@ -112,9 +146,8 @@ class TransferEngine(private val app: Application) {
                 try {
                     if(mayRetry) runCatching { discovery.find(pairing) }.getOrNull()?.let { pairing = it }
                     ensureActive()
-                    local = Socket()
+                    local = discovery.tcpSocket()
                     synchronized(this@TransferEngine) { if(generation.get() != id) { local.close(); return@launch }; socket = local }
-                    discovery.wifi()?.bindSocket(local)
                     local.connect(InetSocketAddress(pairing.host, pairing.port), 3000)
                     local.soTimeout = 10000; local.tcpNoDelay = true
                     channel = Wire(local, pairing.code)
@@ -160,16 +193,20 @@ class TransferEngine(private val app: Application) {
                 mutable.update { it.copy(connecting = true, status = "等待已绑定电脑 · 自动重连中…") }
                 delay(minOf(1000L * failures, 10000L))
             }
-            if(generation.get() == id) {
-                mutable.update { it.copy(connecting = false) }
-                app.stopService(Intent(app, TransferService::class.java))
+            withContext(Dispatchers.Main) {
+                synchronized(this@TransferEngine) {
+                    if(generation.get() == id) {
+                        mutable.update { it.copy(connecting = false) }
+                        if(serviceStarts.complete(id)) stopReadyService()
+                    }
+                }
             }
         }
     }
-    fun disconnect(stopService: Boolean = true) {
-        synchronized(this) { generation.incrementAndGet(); if(stopService) paused = true; connectionJob?.cancel(); heartbeat?.cancel(); sendJob?.cancel(); wire?.close(); wire = null; socket?.close(); socket = null }
+    @Synchronized fun disconnect(stopService: Boolean = true) {
+        synchronized(this) { generation.incrementAndGet(); serviceStarts.cancel(); pendingConnection = null; if(stopService) paused = true; connectionJob?.cancel(); heartbeat?.cancel(); sendJob?.cancel(); wire?.close(); wire = null; socket?.close(); socket = null }
         mutable.update { it.copy(connected = false, connecting = false, sending = false, progress = null, status = if(stopService || it.connected || it.connecting) "已断开连接" else it.status) }
-        if(stopService) app.stopService(Intent(app, TransferService::class.java))
+        if(stopService) scope.launch(Dispatchers.Main.immediate) { synchronized(this@TransferEngine) { stopReadyService() } }
     }
     fun savedAddress(): String = app.getSharedPreferences("pairing", 0).getString("address", "") ?: ""
     fun report(message: String) { mutable.update { it.copy(status = message) } }

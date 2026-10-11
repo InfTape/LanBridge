@@ -1,6 +1,6 @@
 # LanBridge · Windows / Android 局域网互传
 
-桌面项目包含完整源码和可运行文件。Windows 当前版本 1.5.0，Android 版本 1.3.0。支持首次扫码绑定、后续自动重连、手机分享后自动发送，以及 Windows 11 第一层右键菜单“发送到手机”。
+桌面项目包含完整源码和可运行文件。Windows 当前版本 1.5.0，Android 版本 1.3.1。支持首次扫码绑定、后续自动重连、手机分享后自动发送，以及 Windows 11 第一层右键菜单“发送到手机”。Android 1.3.1 修复部分 Android 16 手机扫码后闪退：系统拒绝指定 Wi-Fi 网卡时改用系统默认网络；完成前台服务启动后才开始连接，避免连接立即失败时过早停止服务。
 
 - **Windows**：C++20，纯 Win32 API 窗口与标准控件，原生 DPI 缩放、托盘、文件对话框和拖放；网络使用 Winsock2，加密使用 BCrypt。界面参考 `native-screenshot-tool` 的中文原生控件设计。
 - **Android**：Kotlin + Jetpack Compose BOM 2026.09.00 + Material 3 Expressive 1.5.0-beta01，实际使用 `MaterialExpressiveTheme`、动态配色、Expressive 动效与加载组件，支持深色模式和宽屏双栏。Material 3 Expressive 当前使用 Beta API。
