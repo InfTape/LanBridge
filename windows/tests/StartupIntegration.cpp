@@ -88,7 +88,13 @@ void Heartbeat(bridge::Channel& channel) {
     channel.Send(7);
     while(true) { auto [type,bytes]=channel.Receive(); if(type==7) { channel.Send(8); continue; } Require(type==8,"Connection survived duplicate startup"); return; }
 }
+BOOL CALLBACK FindPopup(HWND window,LPARAM result) {
+    wchar_t name[64]{}; GetClassNameW(window,name,64);
+    if(std::wstring(name)==L"#32768" && IsWindowVisible(window)) *reinterpret_cast<HWND*>(result)=window;
+    return TRUE;
+}
 int wmain(int argc,wchar_t** argv) {
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED); WSADATA winsock{}; WSAStartup(MAKEWORD(2,2),&winsock);
     try {
         RegistryTest();
@@ -102,13 +108,31 @@ int wmain(int argc,wchar_t** argv) {
         Require(!IsWindowVisible(app.window) && WaitForSingleObject(app.handle,0)==WAIT_TIMEOUT,"Startup duplicate neither replaces nor reveals existing app"); Heartbeat(*channel);
         { Process manual; Launch(manual,argv[1],false); ExitSucceeded(manual); }
         Require(IsWindowVisible(app.window) && WaitForSingleObject(app.handle,0)==WAIT_TIMEOUT,"Manual open restores original app"); Heartbeat(*channel);
+        auto minimize=GetDlgItem(app.window,0x7001),maximize=GetDlgItem(app.window,0x7002),close=GetDlgItem(app.window,0x7003);
+        Require(minimize && maximize && close,"Custom title bar buttons");
+        HFONT titleFont=reinterpret_cast<HFONT>(SendMessageW(close,WM_GETFONT,0,0)); LOGFONTW title{};
+        Require(titleFont && GetObjectW(titleFont,sizeof(title),&title)==sizeof(title) && std::wstring(title.lfFaceName)==L"Microsoft YaHei UI","Title font matches UI");
+        RECT client{}; GetClientRect(app.window,&client);
+        POINT drag{client.right/2,20*static_cast<int>(GetDpiForWindow(app.window))/96}; ClientToScreen(app.window,&drag);
+        Require(SendMessageW(app.window,WM_NCHITTEST,0,MAKELPARAM(drag.x,drag.y))==HTCAPTION,"Custom caption remains draggable");
+        SendMessageW(maximize,BM_CLICK,0,0); Require(IsZoomed(app.window),"Custom maximize button"); Heartbeat(*channel);
+        SendMessageW(maximize,BM_CLICK,0,0); Require(!IsZoomed(app.window),"Custom restore button");
+        SendMessageW(minimize,BM_CLICK,0,0); Require(IsIconic(app.window),"Custom minimize button");
+        SendMessageW(app.window,WM_SYSCOMMAND,SC_RESTORE,0); Heartbeat(*channel);
+        RECT work{}; SystemParametersInfoW(SPI_GETWORKAREA,0,&work,0);
+        PostMessageW(app.window,WM_APP+2,MAKELPARAM(work.left+100,work.top+100),MAKELPARAM(WM_CONTEXTMENU,1));
+        HWND menu=nullptr; auto thread=GetWindowThreadProcessId(app.window,nullptr);
+        for(int i=0;i<100 && !menu;i++) { EnumThreadWindows(thread,FindPopup,reinterpret_cast<LPARAM>(&menu)); if(!menu) Sleep(50); }
+        Require(menu!=nullptr,"Actual tray menu opens"); Heartbeat(*channel);
+        SendMessageW(app.window,WM_CANCELMODE,0,0); Heartbeat(*channel);
         auto checkbox=GetDlgItem(app.window,116); Require(checkbox!=nullptr,"Startup checkbox");
         SendMessageW(checkbox,BM_SETCHECK,BST_UNCHECKED,0); SendMessageW(checkbox,BM_CLICK,0,0);
         auto nativePath=std::filesystem::path(argv[1]); nativePath.make_preferred();
         Require(startup::ReadCommand()==startup::CommandLine(nativePath) && SendMessageW(checkbox,BM_GETCHECK,0,0)==BST_CHECKED,"Actual UI enables startup for current executable");
         SendMessageW(checkbox,BM_CLICK,0,0); Require(!startup::ReadCommand() && SendMessageW(checkbox,BM_GETCHECK,0,0)==BST_UNCHECKED,"Actual UI disables startup");
+        SendMessageW(close,BM_CLICK,0,0); Require(!IsWindowVisible(app.window) && WaitForSingleObject(app.handle,0)==WAIT_TIMEOUT,"Caption close keeps app in tray");
         Heartbeat(*channel); channel->Close(); backup.Restore();
-        std::cout<<"PASS: startup to tray, encrypted background connection, duplicate startup preserves session, manual launch restores window, UI registry enable/disable; original startup entry restored; clipboard untouched"<<std::endl;
+        std::cout<<"PASS: startup to tray, encrypted background connection, duplicate startup preserves session, manual launch restores window, caption font/actions and tray popup preserve connection, UI registry enable/disable; original startup entry restored; clipboard untouched"<<std::endl;
         WSACleanup(); CoUninitialize(); return 0;
     } catch(const std::exception& error) { std::cerr<<"FAIL: "<<error.what()<<std::endl; WSACleanup(); CoUninitialize(); return 1; }
 }

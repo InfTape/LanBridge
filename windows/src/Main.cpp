@@ -1,6 +1,9 @@
 #include "Bridge.h"
 #include "ShellTransfer.h"
 #include "Startup.h"
+#include "ui/UiTypography.h"
+#include "ui/TitleBar.h"
+#include "ui/PopupMenu.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <dwmapi.h>
@@ -42,6 +45,9 @@ class App {
     bool receiving_=false;
     bool senderProgress_=false;
     bool startupEnabled_=false;
+    bool trayVersion4_=false;
+    ui::TitleBar titleBar_;
+    ui::PopupMenu popup_;
 public:
     ~App() { if(server_) server_->Stop(); if(sender_.joinable()) sender_.join(); if(integration_.joinable()) integration_.join(); for(auto f:fonts_) DeleteObject(f); DeleteObject(background_); DeleteObject(card_); }
     int Run(HINSTANCE instance,int show,const shelltransfer::Paths& initial = {}) {
@@ -70,8 +76,9 @@ private:
     }
     void FontSetup() {
         for(auto f:fonts_) DeleteObject(f); fonts_.clear();
-        for(int height:{14,24,18}) fonts_.push_back(CreateFontW(-S(height),0,0,0,height==24?FW_SEMIBOLD:FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Microsoft YaHei UI"));
+        for(int height:{14,24,18}) fonts_.push_back(ui::CreateUiFont(dpi_,height,height==24?FW_SEMIBOLD:FW_NORMAL));
         for(auto [h,r]:controls_) SendMessageW(h,WM_SETFONT,reinterpret_cast<WPARAM>(fonts_[0]),TRUE);
+        titleBar_.SetFont(fonts_[0]);
     }
     HWND Control(const wchar_t* cls,const wchar_t* text,int id,DWORD style=0,DWORD ex=0) {
         auto h=CreateWindowExW(ex,cls,text,WS_CHILD|WS_VISIBLE|style,0,0,0,0,window_,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),GetModuleHandleW(nullptr),nullptr);
@@ -79,6 +86,7 @@ private:
     }
     void Create() {
         dpi_=GetDpiForWindow(window_);
+        if(!titleBar_.Create(window_,GetModuleHandleW(nullptr))) throw std::runtime_error("无法创建标题栏");
         Control(L"STATIC",L"LanBridge",10);
         Control(L"STATIC",L"同一网络，随手互传。",11);
         Control(L"BUTTON",L"启用右键发送",EnableMenu,WS_TABSTOP);
@@ -120,10 +128,12 @@ private:
         BOOL dark=FALSE; DwmSetWindowAttribute(window_,20,&dark,sizeof(dark));
         tray_.cbSize=sizeof(tray_); tray_.hWnd=window_; tray_.uID=1; tray_.uFlags=NIF_ICON|NIF_MESSAGE|NIF_TIP; tray_.uCallbackMessage=TrayMessage; tray_.hIcon=LoadIconW(nullptr,IDI_APPLICATION);
         wcscpy_s(tray_.szTip,L"LanBridge · 局域网互传"); Shell_NotifyIconW(NIM_ADD,&tray_);
+        tray_.uVersion=NOTIFYICON_VERSION_4; trayVersion4_=Shell_NotifyIconW(NIM_SETVERSION,&tray_)!=FALSE;
     }
-    void Place(int id,int x,int y,int w,int h) { MoveWindow(Item(id),S(x),S(y),S(w),S(h),TRUE); }
+    void Place(int id,int x,int y,int w,int h) { MoveWindow(Item(id),S(x),S(y+ui::TitleBar::kHeight),S(w),S(h),TRUE); }
     void Layout() {
-        RECT rc; GetClientRect(window_,&rc); int w=MulDiv(rc.right,96,dpi_),h=MulDiv(rc.bottom,96,dpi_);
+        RECT rc; GetClientRect(window_,&rc); int w=MulDiv(rc.right,96,dpi_),h=MulDiv(rc.bottom,96,dpi_)-ui::TitleBar::kHeight;
+        titleBar_.Layout(rc.right);
         int right=w-364,editor=right-205;
         int qrEdge=std::clamp(h-448,208,246),afterQr=151+qrEdge;
         Place(10,32,22,300,38); Place(11,34,63,500,26);
@@ -159,7 +169,10 @@ private:
     }
     void DrawQr(const DRAWITEMSTRUCT& item) {
         FillRect(item.hDC,&item.rcItem,static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
-        if(!qr_) { DrawTextW(item.hDC,L"请连接局域网并选择电脑地址",-1,const_cast<RECT*>(&item.rcItem),DT_CENTER|DT_VCENTER|DT_WORDBREAK); return; }
+        if(!qr_) {
+            int saved=SaveDC(item.hDC); SelectObject(item.hDC,fonts_[0]); SetBkMode(item.hDC,TRANSPARENT); SetTextColor(item.hDC,RGB(36,47,65));
+            DrawTextW(item.hDC,L"请连接局域网并选择电脑地址",-1,const_cast<RECT*>(&item.rcItem),DT_CENTER|DT_VCENTER|DT_WORDBREAK); RestoreDC(item.hDC,saved); return;
+        }
         int n=qr_->getSize(),cell=std::max(1,static_cast<int>(std::min(item.rcItem.right-item.rcItem.left,item.rcItem.bottom-item.rcItem.top))/(n+8));
         int side=(n+8)*cell;
         int left=item.rcItem.left+(item.rcItem.right-item.rcItem.left-side)/2+4*cell;
@@ -315,25 +328,38 @@ private:
     void Paint(HDC dc) {
         RECT rc; GetClientRect(window_,&rc); FillRect(dc,&rc,background_);
         auto oldPen=SelectObject(dc,GetStockObject(NULL_PEN)); auto oldBrush=SelectObject(dc,card_);
-        RoundRect(dc,S(24),S(98),S(302),rc.bottom-S(63),S(18),S(18));
-        RoundRect(dc,S(316),S(98),rc.right-S(24),S(331),S(18),S(18));
-        RoundRect(dc,S(316),S(341),rc.right-S(24),rc.bottom-S(63),S(18),S(18));
+        RoundRect(dc,S(24),S(98+ui::TitleBar::kHeight),S(302),rc.bottom-S(63),S(18),S(18));
+        RoundRect(dc,S(316),S(98+ui::TitleBar::kHeight),rc.right-S(24),S(331+ui::TitleBar::kHeight),S(18),S(18));
+        RoundRect(dc,S(316),S(341+ui::TitleBar::kHeight),rc.right-S(24),rc.bottom-S(63),S(18),S(18));
         SelectObject(dc,oldPen); SelectObject(dc,oldBrush);
+        titleBar_.Paint(dc);
     }
     static LRESULT CALLBACK Proc(HWND h,UINT m,WPARAM w,LPARAM l) {
         auto* app=reinterpret_cast<App*>(GetWindowLongPtrW(h,GWLP_USERDATA));
         if(m==WM_NCCREATE) { app=static_cast<App*>(reinterpret_cast<CREATESTRUCTW*>(l)->lpCreateParams); app->window_=h; SetWindowLongPtrW(h,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(app)); }
         if(!app) return DefWindowProcW(h,m,w,l);
-        if(TaskbarCreatedMessage && m==TaskbarCreatedMessage) { Shell_NotifyIconW(NIM_ADD,&app->tray_); return 0; }
+        if(TaskbarCreatedMessage && m==TaskbarCreatedMessage) {
+            app->popup_.HideTooltip(); Shell_NotifyIconW(NIM_ADD,&app->tray_);
+            app->tray_.uVersion=NOTIFYICON_VERSION_4; app->trayVersion4_=Shell_NotifyIconW(NIM_SETVERSION,&app->tray_)!=FALSE; return 0;
+        }
         switch(m) {
+        case WM_NCCALCSIZE: return ui::TitleBar::CalculateClient(h,w,l);
+        case WM_NCHITTEST: return ui::TitleBar::HitTest(h,l);
+        case WM_ACTIVATE: InvalidateRect(h,nullptr,FALSE); break;
+        case WM_SETTEXT: { auto result=DefWindowProcW(h,m,w,l); InvalidateRect(h,nullptr,FALSE); return result; }
         case WM_CREATE: app->Create(); return 0;
         case WM_SIZE: if(w!=SIZE_MINIMIZED && !app->fonts_.empty()) app->Layout(); return 0;
         case WM_GETMINMAXINFO: { auto p=reinterpret_cast<MINMAXINFO*>(l); p->ptMinTrackSize={app->S(990),app->S(720)}; return 0; }
         case WM_DPICHANGED: {
             app->dpi_=HIWORD(w); app->FontSetup(); auto r=reinterpret_cast<RECT*>(l); SetWindowPos(h,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE); app->Layout(); return 0;
         }
-        case WM_COMMAND: if(LOWORD(w)==Ip && HIWORD(w)==CBN_SELCHANGE) app->UpdateQr(); else if(LOWORD(w)==History && HIWORD(w)==LBN_DBLCLK) app->Command(Recopy); else if(HIWORD(w)==BN_CLICKED) app->Command(LOWORD(w)); return 0;
-        case WM_DRAWITEM: { auto item=reinterpret_cast<DRAWITEMSTRUCT*>(l); if(item->CtlID==Qr) { app->DrawQr(*item); return TRUE; } break; }
+        case WM_COMMAND: if(app->titleBar_.HandleCommand(LOWORD(w))) return 0; if(LOWORD(w)==Ip && HIWORD(w)==CBN_SELCHANGE) app->UpdateQr(); else if(LOWORD(w)==History && HIWORD(w)==LBN_DBLCLK) app->Command(Recopy); else if(HIWORD(w)==BN_CLICKED) app->Command(LOWORD(w)); return 0;
+        case WM_MEASUREITEM: if(app->popup_.Measure(*reinterpret_cast<MEASUREITEMSTRUCT*>(l))) return TRUE; break;
+        case WM_DRAWITEM: {
+            auto item=reinterpret_cast<DRAWITEMSTRUCT*>(l);
+            if(app->titleBar_.DrawButton(*item) || app->popup_.Draw(*item)) return TRUE;
+            if(item->CtlID==Qr) { app->DrawQr(*item); return TRUE; } break;
+        }
         case EventsMessage: app->Drain(); return 0;
         case WM_COPYDATA: {
             auto* data=reinterpret_cast<COPYDATASTRUCT*>(l);
@@ -347,15 +373,23 @@ private:
             DragFinish(drop); app->Files(paths); return 0;
         }
         case TrayMessage: {
-            if(l==WM_LBUTTONDBLCLK || l==WM_LBUTTONUP) { ShowWindow(h,SW_RESTORE); SetForegroundWindow(h); }
-            if(l==WM_RBUTTONUP) {
+            UINT event=app->trayVersion4_?LOWORD(l):static_cast<UINT>(l);
+            POINT p; if(app->trayVersion4_) p={GET_X_LPARAM(w),GET_Y_LPARAM(w)}; else GetCursorPos(&p);
+            if(event==NIN_POPUPOPEN) app->popup_.ShowTooltip(h,p);
+            if(event==NIN_POPUPCLOSE) app->popup_.HideTooltip();
+            if(event==WM_LBUTTONDBLCLK || event==WM_LBUTTONUP || event==NIN_SELECT || event==NIN_KEYSELECT) { app->popup_.HideTooltip(); ShowWindow(h,SW_RESTORE); SetForegroundWindow(h); }
+            if(event==WM_RBUTTONUP || event==WM_CONTEXTMENU) {
+                if(p.x==-1 && p.y==-1) {
+                    NOTIFYICONIDENTIFIER icon{sizeof(icon)}; icon.hWnd=h; icon.uID=1; RECT rect{};
+                    if(SUCCEEDED(Shell_NotifyIconGetRect(&icon,&rect))) p={rect.left,rect.top}; else GetCursorPos(&p);
+                }
                 auto menu=CreatePopupMenu(); AppendMenuW(menu,MF_STRING,1,L"显示 LanBridge");
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
                 AppendMenuW(menu,MF_STRING|(app->integrating_?MF_GRAYED:0),EnableMenu,L"启用右键发送");
                 AppendMenuW(menu,MF_STRING|(app->integrating_?MF_GRAYED:0),DisableMenu,L"移除右键发送");
                 AppendMenuW(menu,MF_STRING|(app->startupEnabled_?MF_CHECKED:0),Startup,L"开机启动（收至托盘）");
-                AppendMenuW(menu,MF_SEPARATOR,0,nullptr); AppendMenuW(menu,MF_STRING,Exit,L"退出"); POINT p; GetCursorPos(&p); SetForegroundWindow(h);
-                auto id=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,p.x,p.y,0,h,nullptr); DestroyMenu(menu);
+                AppendMenuW(menu,MF_SEPARATOR,0,nullptr); AppendMenuW(menu,MF_STRING,Exit,L"退出");
+                auto id=app->popup_.Track(menu,h,p); DestroyMenu(menu);
                 if(id==1) { ShowWindow(h,SW_RESTORE); SetForegroundWindow(h); }
                 else if(id) {
                     if(id==Startup) SendMessageW(app->Item(Startup),BM_SETCHECK,app->startupEnabled_?BST_UNCHECKED:BST_CHECKED,0);

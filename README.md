@@ -1,6 +1,6 @@
 # LanBridge · Windows / Android 局域网互传
 
-桌面项目包含完整源码和可运行文件。Windows 当前版本 1.4.0，Android 版本 1.2.2。支持扫码配对、手机分享后自动发送，以及 Windows 11 第一层右键菜单“发送到手机”。
+桌面项目包含完整源码和可运行文件。Windows 当前版本 1.4.1，Android 版本 1.2.2。支持扫码配对、手机分享后自动发送，以及 Windows 11 第一层右键菜单“发送到手机”。
 
 - **Windows**：C++20，纯 Win32 API 窗口与标准控件，原生 DPI 缩放、托盘、文件对话框和拖放；网络使用 Winsock2，加密使用 BCrypt。界面参考 `native-screenshot-tool` 的中文原生控件设计。
 - **Android**：Kotlin + Jetpack Compose BOM 2026.09.00 + Material 3 Expressive 1.5.0-beta01，实际使用 `MaterialExpressiveTheme`、动态配色、Expressive 动效与加载组件，支持深色模式和宽屏双栏。Material 3 Expressive 当前使用 Beta API。
@@ -19,6 +19,8 @@
 6. Windows 中选择文件、拖入文件或点击发送剪贴板，也可发送编辑框中的文本。手机收到的文件在系统“下载/LanBridge”目录，文本可手动复制。
 
 Windows 接收目录为当前用户的 **下载/LanBridge**。右上角关闭按钮收起到托盘，仍继续接收；彻底退出使用托盘右键菜单。配对码每次启动重新生成。一次连接一台手机，多文件按顺序传输；文件夹请先压缩。连续接收多个文件时剪贴板保留最后一个文件，其余文件可在历史列表中重新复制。
+
+1.4.1 参考 `native-screenshot-tool` 的 Win32 自绘方式，将标题栏、托盘右键菜单、托盘悬停提示与普通控件统一为 Microsoft YaHei UI，启用 ClearType 并按所在屏幕 DPI 缩放；未连接局域网时的二维码占位文字也使用同一字体。标题栏保留拖动、双击最大化、边缘缩放和最小化/最大化/关闭操作；托盘菜单保留键盘操作与开机启动勾选状态。
 
 ## Windows 开机启动
 
@@ -107,7 +109,7 @@ cd ..
 - Windows 原生协议集成测试：双向 Unicode 文本与文件、SHA-256、空文件、同名文件、心跳、错误配对码、目录穿越拒绝及临时文件清理。
 - Windows ShellIntegration：原生 COM 命令标题/图标、多文件状态、文件夹隐藏、无效 IPC 拒绝、中文路径、命令行引用、首次右键启动后等待配对、复用运行中程序、队列顺序，以及已连接后的多文件发送与 SHA-256 校验；不改写剪贴板。
 - Windows 已注册菜单回归：使用 `ShellIntegration.exe --registered-live 完整路径\LanBridge.exe`，在加密连接已建立时经系统激活菜单 30 次，验证原进程与连接存活，再实际调用已注册菜单发送两个文件并校验 SHA-256。需预先启用菜单、关闭其他 LanBridge 实例；不改写剪贴板。
-- Windows StartupIntegration：真实注册表读写、中文和带空格路径、取消时保留其他启动项、`--startup` 隐藏窗口但可加密连接、重复自启动保持原连接，以及手动打开恢复窗口。UI 测试备份并恢复原 LanBridge 启动项，不改写剪贴板。
+- Windows StartupIntegration：真实注册表读写、中文和带空格路径、取消时保留其他启动项、`--startup` 隐藏窗口但可加密连接、重复自启动保持原连接，以及手动打开恢复窗口；标题字体、拖动命中区域、最小化/最大化/还原/关闭到托盘和托盘菜单期间保持连接。UI 测试备份并恢复原 LanBridge 启动项，不改写剪贴板。
 - Windows 实际窗口测试：接收后自动生成 `CF_UNICODETEXT` / `CF_HDROP`、反向发送、接收历史和重新复制；测试会保存并恢复原剪贴板。若原剪贴板含无法保存的虚拟文件数据，测试会跳过，避免覆盖用户内容。
 - Android JVM 测试：配对输入校验；**实际生产 Wire.kt** 与 Windows BCrypt 服务互通，覆盖 0、1、262144、262145、1048593 字节文件以及 Unicode 文本和心跳。
 - Android 二维码测试：配对格式与无效二维码拒绝、相机亮度缓冲区行间距/像素间距处理、空画面、Windows 实际界面解码、地址刷新及旋转画面。
