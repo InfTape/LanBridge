@@ -6,6 +6,7 @@
 #include "ui/UiTypography.h"
 #include "ui/TitleBar.h"
 #include "ui/PopupMenu.h"
+#include "ui/EditScrollbar.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <dwmapi.h>
@@ -23,6 +24,11 @@
 namespace {
 constexpr UINT EventsMessage=WM_APP+1,TrayMessage=WM_APP+2;
 const UINT TaskbarCreatedMessage=RegisterWindowMessageW(L"TaskbarCreated");
+constexpr int ButtonHeight=32;
+constexpr int ActionButtonWidth=110;
+constexpr int SendInputHeight=149;
+constexpr int WindowWidth=890;
+constexpr int WindowHeight=620;
 enum ControlId { Ip=100,Code,CopyLink,Disconnect,Text,SendText,SendClipboard,SendFile,OpenFolder,History,Recopy,Clear,Progress,Status,Startup=116,ResetPairing,SendFolder,Qr=200,Exit=900 };
 struct Record { bool file; std::wstring text; std::filesystem::path path; };
 class App {
@@ -33,7 +39,7 @@ class App {
     std::string code_;
     std::optional<qrcodegen::QrCode> qr_;
     std::vector<std::pair<HWND,RECT>> controls_;
-    std::vector<HFONT> fonts_;
+    HFONT font_=nullptr;
     std::deque<Record> records_;
     std::mutex eventMutex_;
     std::deque<bridge::Event> events_;
@@ -49,11 +55,12 @@ class App {
     bool receiving_=false;
     bool senderProgress_=false;
     bool startupEnabled_=false;
+    bool updatingTextScroll_=false;
     bool trayVersion4_=false;
     ui::TitleBar titleBar_;
     ui::PopupMenu popup_;
 public:
-    ~App() { discovery_.Stop(); if(server_) server_->Stop(); if(sender_.joinable()) sender_.join(); if(integration_.joinable()) integration_.join(); for(auto f:fonts_) DeleteObject(f); DeleteObject(background_); DeleteObject(card_); }
+    ~App() { discovery_.Stop(); if(server_) server_->Stop(); if(sender_.joinable()) sender_.join(); if(integration_.joinable()) integration_.join(); if(font_) DeleteObject(font_); DeleteObject(background_); DeleteObject(card_); }
     int Run(HINSTANCE instance,int show,const shelltransfer::Paths& initial = {}) {
         folder_=bridge::ReceiveDirectory(); code_=pairing::LoadOrCreate(pairing::CredentialPath());
         WNDCLASSEXW wc{sizeof(wc)}; wc.lpfnWndProc=Proc; wc.hInstance=instance; wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
@@ -61,9 +68,9 @@ public:
         RegisterClassExW(&wc);
         RECT area{}; SystemParametersInfoW(SPI_GETWORKAREA,0,&area,0);
         int scale=GetDpiForSystem();
-        int width=std::min(MulDiv(1060,scale,96),static_cast<int>(area.right-area.left));
-        int height=std::min(MulDiv(820,scale,96),static_cast<int>(area.bottom-area.top));
-        window_=CreateWindowExW(WS_EX_ACCEPTFILES,wc.lpszClassName,L"LanBridge · 局域网互传",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,width,height,nullptr,nullptr,instance,this);
+        int width=std::min(MulDiv(WindowWidth,scale,96),static_cast<int>(area.right-area.left));
+        int height=std::min(MulDiv(WindowHeight,scale,96),static_cast<int>(area.bottom-area.top));
+        window_=CreateWindowExW(WS_EX_ACCEPTFILES,wc.lpszClassName,L"局域网互传",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,width,height,nullptr,nullptr,instance,this);
         if(!window_) return 1;
         server_=std::make_unique<bridge::Server>(folder_,[this](bridge::Event e) { Queue(std::move(e)); });
         server_->Start(42831,code_);
@@ -82,24 +89,22 @@ private:
         PostMessageW(window_,EventsMessage,0,0);
     }
     void FontSetup() {
-        for(auto f:fonts_) DeleteObject(f); fonts_.clear();
-        for(int height:{14,24,18}) fonts_.push_back(ui::CreateUiFont(dpi_,height,height==24?FW_SEMIBOLD:FW_NORMAL));
-        for(auto [h,r]:controls_) SendMessageW(h,WM_SETFONT,reinterpret_cast<WPARAM>(fonts_[0]),TRUE);
-        titleBar_.SetFont(fonts_[0]);
+        auto replacement=ui::CreateUiFont(dpi_);
+        if(!replacement) throw std::runtime_error("无法创建界面字体");
+        for(auto [h,r]:controls_) SendMessageW(h,WM_SETFONT,reinterpret_cast<WPARAM>(replacement),TRUE);
+        titleBar_.SetFont(replacement);
+        if(font_) DeleteObject(font_);
+        font_=replacement;
     }
     HWND Control(const wchar_t* cls,const wchar_t* text,int id,DWORD style=0,DWORD ex=0) {
+        if(wcscmp(cls,L"STATIC")==0 && (style&SS_TYPEMASK)!=SS_OWNERDRAW)
+            style|=SS_LEFTNOWORDWRAP|SS_CENTERIMAGE;
         auto h=CreateWindowExW(ex,cls,text,WS_CHILD|WS_VISIBLE|style,0,0,0,0,window_,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),GetModuleHandleW(nullptr),nullptr);
         controls_.push_back({h,{}}); return h;
     }
     void Create() {
         dpi_=GetDpiForWindow(window_);
         if(!titleBar_.Create(window_,GetModuleHandleW(nullptr))) throw std::runtime_error("无法创建标题栏");
-        Control(L"STATIC",L"LanBridge",10);
-        Control(L"STATIC",L"同一网络，随手互传。",11);
-        Control(L"BUTTON",L"开机启动（默认收至托盘）",Startup,BS_AUTOCHECKBOX|WS_TABSTOP);
-        try { startupEnabled_=startup::IsEnabled(startup::ExecutablePath()); }
-        catch(const std::exception& e) { Queue({bridge::Event::Error,bridge::Wide(e.what())}); }
-        SendMessageW(Item(Startup),BM_SETCHECK,startupEnabled_?BST_CHECKED:BST_UNCHECKED,0);
         Control(L"STATIC",L"01   扫码连接",12);
         Control(L"STATIC",L"配对二维码",Qr,SS_OWNERDRAW);
         Control(L"STATIC",L"电脑地址",13);
@@ -114,6 +119,10 @@ private:
         Control(L"BUTTON",L"断开设备",Disconnect,WS_TABSTOP);
         Control(L"STATIC",L"首次扫码，以后自动连接",15);
         Control(L"BUTTON",L"重置配对",ResetPairing,WS_TABSTOP);
+        Control(L"BUTTON",L"开机启动（默认收至托盘）",Startup,BS_AUTOCHECKBOX|WS_TABSTOP);
+        try { startupEnabled_=startup::IsEnabled(startup::ExecutablePath()); }
+        catch(const std::exception& e) { Queue({bridge::Event::Error,bridge::Wide(e.what())}); }
+        SendMessageW(Item(Startup),BM_SETCHECK,startupEnabled_?BST_CHECKED:BST_UNCHECKED,0);
         Control(L"STATIC",L"02   发送到手机",16);
         Control(L"EDIT",L"",Text,WS_TABSTOP|ES_MULTILINE|ES_AUTOVSCROLL|WS_VSCROLL|ES_WANTRETURN,WS_EX_CLIENTEDGE);
         SendMessageW(Item(Text),EM_SETCUEBANNER,TRUE,reinterpret_cast<LPARAM>(L"输入要发送的文本…"));
@@ -141,24 +150,33 @@ private:
     void Layout() {
         RECT rc; GetClientRect(window_,&rc); int w=MulDiv(rc.right,96,dpi_),h=MulDiv(rc.bottom,96,dpi_)-ui::TitleBar::kHeight;
         titleBar_.Layout(rc.right);
-        int right=w-364,editor=right-205;
-        int qrEdge=std::clamp(h-448,208,246),afterQr=151+qrEdge;
-        Place(10,32,22,300,38); Place(11,34,63,500,26);
-        Place(Startup,w-350,38,310,24);
-        Place(12,40,111,246,28); Place(Qr,40+(246-qrEdge)/2,151,qrEdge,qrEdge);
+        int right=w-364,editor=right-ActionButtonWidth-15;
+        const int actionX=w-40-ActionButtonWidth;
+        // The card supplies the QR quiet zone outside the square image.
+        const int qrEdge=SendInputHeight,afterQr=69+qrEdge+20;
+        Place(12,40,29,246,28); Place(Qr,40+(246-qrEdge)/2,69,qrEdge,qrEdge);
         Place(15,40,afterQr+5,246,28);
         Place(13,40,afterQr+42,80,25); Place(Ip,124,afterQr+38,162,240);
         Place(14,40,afterQr+78,246,25); Place(Code,40,afterQr+107,246,31);
-        Place(CopyLink,40,afterQr+151,246,33); Place(Disconnect,40,afterQr+194,117,33); Place(ResetPairing,169,afterQr+194,117,33);
-        Place(16,324,111,right,28); Place(Text,324,151,editor,149);
-        Place(SendText,w-230,151,190,32); Place(SendClipboard,w-230,190,190,32); Place(SendFile,w-230,229,190,32); Place(SendFolder,w-230,268,190,32);
-        Place(17,324,307,right,20);
-        Place(18,324,354,right,28); Place(19,324,394,right,26);
-        Place(History,324,430,editor,std::max(75,h-494)); Place(Recopy,w-230,430,190,32); Place(OpenFolder,w-230,468,190,32); Place(Clear,w-230,506,190,32);
+        Place(CopyLink,40,afterQr+151,246,ButtonHeight); Place(Disconnect,40,afterQr+194,117,ButtonHeight); Place(ResetPairing,169,afterQr+194,117,ButtonHeight);
+        SIZE startupSize{};
+        const int startupWidth=SendMessageW(Item(Startup),BCM_GETIDEALSIZE,0,reinterpret_cast<LPARAM>(&startupSize))
+            ? std::min(246,MulDiv(startupSize.cx,96,dpi_)) : 246;
+        Place(Startup,40,afterQr+237,startupWidth,ButtonHeight);
+        Place(16,324,29,right,28); Place(Text,324,69,editor,SendInputHeight);
+        Place(SendText,actionX,69,ActionButtonWidth,ButtonHeight); Place(SendClipboard,actionX,108,ActionButtonWidth,ButtonHeight); Place(SendFile,actionX,147,ActionButtonWidth,ButtonHeight); Place(SendFolder,actionX,186,ActionButtonWidth,ButtonHeight);
+        Place(17,324,225,right,20);
+        Place(18,324,272,right,28); Place(19,324,312,right,26);
+        Place(History,324,348,editor,SendInputHeight); Place(Recopy,actionX,348,ActionButtonWidth,ButtonHeight); Place(OpenFolder,actionX,386,ActionButtonWidth,ButtonHeight); Place(Clear,actionX,424,ActionButtonWidth,ButtonHeight);
         Place(Progress,32,h-49,w-64,8); Place(Status,32,h-33,w-64,26);
-        SendMessageW(Item(10),WM_SETFONT,reinterpret_cast<WPARAM>(fonts_[1]),TRUE);
-        for(int id:{12,16,18}) SendMessageW(Item(id),WM_SETFONT,reinterpret_cast<WPARAM>(fonts_[2]),TRUE);
+        UpdateTextScrollbar();
         InvalidateRect(window_,nullptr,TRUE);
+    }
+    void UpdateTextScrollbar() {
+        if(updatingTextScroll_) return;
+        updatingTextScroll_=true;
+        ui::UpdateEditScrollbar(Item(Text));
+        updatingTextScroll_=false;
     }
     std::wstring Value(int id) {
         int n=GetWindowTextLengthW(Item(id)); std::wstring text(n+1,L'\0'); GetWindowTextW(Item(id),text.data(),n+1); text.resize(n); return text;
@@ -176,15 +194,15 @@ private:
     void DrawQr(const DRAWITEMSTRUCT& item) {
         FillRect(item.hDC,&item.rcItem,static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
         if(!qr_) {
-            int saved=SaveDC(item.hDC); SelectObject(item.hDC,fonts_[0]); SetBkMode(item.hDC,TRANSPARENT); SetTextColor(item.hDC,RGB(36,47,65));
+            int saved=SaveDC(item.hDC); SelectObject(item.hDC,font_); SetBkMode(item.hDC,TRANSPARENT); SetTextColor(item.hDC,RGB(36,47,65));
             DrawTextW(item.hDC,L"请连接局域网并选择电脑地址",-1,const_cast<RECT*>(&item.rcItem),DT_CENTER|DT_VCENTER|DT_WORDBREAK); RestoreDC(item.hDC,saved); return;
         }
-        int n=qr_->getSize(),cell=std::max(1,static_cast<int>(std::min(item.rcItem.right-item.rcItem.left,item.rcItem.bottom-item.rcItem.top))/(n+8));
-        int side=(n+8)*cell;
-        int left=item.rcItem.left+(item.rcItem.right-item.rcItem.left-side)/2+4*cell;
-        int top=item.rcItem.top+(item.rcItem.bottom-item.rcItem.top-side)/2+4*cell;
+        const int n=qr_->getSize();
+        const int side=std::min(item.rcItem.right-item.rcItem.left,item.rcItem.bottom-item.rcItem.top);
+        const int left=item.rcItem.left+(item.rcItem.right-item.rcItem.left-side)/2;
+        const int top=item.rcItem.top+(item.rcItem.bottom-item.rcItem.top-side)/2;
         for(int y=0;y<n;y++) for(int x=0;x<n;x++) if(qr_->getModule(x,y)) {
-            RECT module{left+x*cell,top+y*cell,left+(x+1)*cell,top+(y+1)*cell};
+            RECT module{left+MulDiv(x,side,n),top+MulDiv(y,side,n),left+MulDiv(x+1,side,n),top+MulDiv(y+1,side,n)};
             FillRect(item.hDC,&module,static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         }
     }
@@ -371,9 +389,9 @@ private:
     void Paint(HDC dc) {
         RECT rc; GetClientRect(window_,&rc); FillRect(dc,&rc,background_);
         auto oldPen=SelectObject(dc,GetStockObject(NULL_PEN)); auto oldBrush=SelectObject(dc,card_);
-        RoundRect(dc,S(24),S(98+ui::TitleBar::kHeight),S(302),rc.bottom-S(63),S(18),S(18));
-        RoundRect(dc,S(316),S(98+ui::TitleBar::kHeight),rc.right-S(24),S(331+ui::TitleBar::kHeight),S(18),S(18));
-        RoundRect(dc,S(316),S(341+ui::TitleBar::kHeight),rc.right-S(24),rc.bottom-S(63),S(18),S(18));
+        RoundRect(dc,S(24),S(16+ui::TitleBar::kHeight),S(302),rc.bottom-S(63),S(18),S(18));
+        RoundRect(dc,S(316),S(16+ui::TitleBar::kHeight),rc.right-S(24),S(249+ui::TitleBar::kHeight),S(18),S(18));
+        RoundRect(dc,S(316),S(259+ui::TitleBar::kHeight),rc.right-S(24),rc.bottom-S(63),S(18),S(18));
         SelectObject(dc,oldPen); SelectObject(dc,oldBrush);
         titleBar_.Paint(dc);
     }
@@ -391,12 +409,12 @@ private:
         case WM_ACTIVATE: InvalidateRect(h,nullptr,FALSE); break;
         case WM_SETTEXT: { auto result=DefWindowProcW(h,m,w,l); InvalidateRect(h,nullptr,FALSE); return result; }
         case WM_CREATE: app->Create(); return 0;
-        case WM_SIZE: if(w!=SIZE_MINIMIZED && !app->fonts_.empty()) app->Layout(); return 0;
-        case WM_GETMINMAXINFO: { auto p=reinterpret_cast<MINMAXINFO*>(l); p->ptMinTrackSize={app->S(990),app->S(720)}; return 0; }
+        case WM_SIZE: if(w!=SIZE_MINIMIZED && app->font_) app->Layout(); return 0;
+        case WM_GETMINMAXINFO: { auto p=reinterpret_cast<MINMAXINFO*>(l); p->ptMinTrackSize={app->S(WindowWidth),app->S(WindowHeight)}; return 0; }
         case WM_DPICHANGED: {
             app->dpi_=HIWORD(w); app->FontSetup(); auto r=reinterpret_cast<RECT*>(l); SetWindowPos(h,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE); app->Layout(); return 0;
         }
-        case WM_COMMAND: if(app->titleBar_.HandleCommand(LOWORD(w))) return 0; if(LOWORD(w)==Ip && HIWORD(w)==CBN_SELCHANGE) app->UpdateQr(); else if(LOWORD(w)==History && HIWORD(w)==LBN_DBLCLK) app->Command(Recopy); else if(HIWORD(w)==BN_CLICKED) app->Command(LOWORD(w)); return 0;
+        case WM_COMMAND: if(app->titleBar_.HandleCommand(LOWORD(w))) return 0; if(LOWORD(w)==Text && HIWORD(w)==EN_CHANGE) app->UpdateTextScrollbar(); else if(LOWORD(w)==Ip && HIWORD(w)==CBN_SELCHANGE) app->UpdateQr(); else if(LOWORD(w)==History && HIWORD(w)==LBN_DBLCLK) app->Command(Recopy); else if(HIWORD(w)==BN_CLICKED) app->Command(LOWORD(w)); return 0;
         case WM_MEASUREITEM: if(app->popup_.Measure(*reinterpret_cast<MEASUREITEMSTRUCT*>(l))) return TRUE; break;
         case WM_DRAWITEM: {
             auto item=reinterpret_cast<DRAWITEMSTRUCT*>(l);
@@ -443,12 +461,12 @@ private:
         case WM_ENDSESSION: if(w) DestroyWindow(h); return 0;
         case WM_CTLCOLORSTATIC: {
             auto dc=reinterpret_cast<HDC>(w); SetTextColor(dc,RGB(36,47,65)); SetBkMode(dc,TRANSPARENT);
-            int id=GetDlgCtrlID(reinterpret_cast<HWND>(l)); return reinterpret_cast<LRESULT>(id==10 || id==11 || id==Status?app->background_:app->card_);
+            int id=GetDlgCtrlID(reinterpret_cast<HWND>(l)); return reinterpret_cast<LRESULT>(id==Status?app->background_:app->card_);
         }
         case WM_CTLCOLORBTN: {
             if(GetDlgCtrlID(reinterpret_cast<HWND>(l))!=Startup) break;
             SetTextColor(reinterpret_cast<HDC>(w),RGB(36,47,65)); SetBkMode(reinterpret_cast<HDC>(w),TRANSPARENT);
-            return reinterpret_cast<LRESULT>(app->background_);
+            return reinterpret_cast<LRESULT>(app->card_);
         }
         case WM_ERASEBKGND: return 1;
         case WM_PRINTCLIENT: app->Paint(reinterpret_cast<HDC>(w)); return 0;

@@ -38,6 +38,14 @@ int wmain(int argc,wchar_t** argv) {
     INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_STANDARD_CLASSES}; InitCommonControlsEx(&controls);
     ULONG_PTR token=0; Gdiplus::GdiplusStartupInput input; Gdiplus::GdiplusStartup(&token,&input,nullptr);
     try {
+        for(UINT dpi:{96u,120u,144u,192u,240u}) {
+            auto font=ui::CreateUiFont(dpi); LOGFONTW value{};
+            Require(font && GetObjectW(font,sizeof(value),&value)==sizeof(value) && std::wstring(value.lfFaceName)==L"Microsoft YaHei UI" && value.lfHeight==-MulDiv(9,dpi,72) && value.lfWeight==FW_NORMAL,"Unified scalable 9pt font"); DeleteObject(font);
+        }
+        if(argc==2 && std::wstring(argv[1])==L"--fonts-only") {
+            std::cout<<"PASS: normal-weight Microsoft YaHei UI at 9pt for 100/125/150/200/250 percent DPI"<<std::endl;
+            Gdiplus::GdiplusShutdown(token); return 0;
+        }
         // Capture either application's real tray popup without relaunching it.
         if(argc==5 && std::wstring(argv[1])==L"--existing") {
             Require(std::wstring(argv[2])==L"LanBridgeWindow" || std::wstring(argv[2])==L"NativeScreenshot.MainWindow","Supported application class");
@@ -56,10 +64,6 @@ int wmain(int argc,wchar_t** argv) {
             Gdiplus::GdiplusShutdown(token); return 0;
         }
         Require(argc==3 && !FindWindowW(L"LanBridgeWindow",nullptr),"Expected app and PNG paths, no active LanBridge");
-        for(UINT dpi:{96u,144u,192u}) {
-            auto font=ui::CreateUiFont(dpi); LOGFONTW value{};
-            Require(font && GetObjectW(font,sizeof(value),&value)==sizeof(value) && std::wstring(value.lfFaceName)==L"Microsoft YaHei UI" && value.lfHeight==-MulDiv(14,dpi,96),"Unified scalable font"); DeleteObject(font);
-        }
         Process app; std::wstring command=L"\""+std::wstring(argv[1])+L"\""; STARTUPINFOW startup{sizeof(startup)};
         Require(CreateProcessW(argv[1],command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&startup,&app.info)!=FALSE,"Launch app"); WaitForInputIdle(app.info.hProcess,10000);
         for(int i=0;i<100 && !app.window;i++) { app.window=FindWindowW(L"LanBridgeWindow",nullptr); if(!app.window) Sleep(50); }

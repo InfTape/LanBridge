@@ -19,10 +19,10 @@ inline UINT UiDpi(HWND window) {
 }
 
 // Keep application-owned text consistent, including shell-facing popup windows.
-inline HFONT CreateUiFont(UINT dpi, int height = 14, int weight = FW_NORMAL) {
+inline HFONT CreateUiFont(UINT dpi) {
     LOGFONTW font{};
-    font.lfHeight = -MulDiv(height, dpi, 96);
-    font.lfWeight = weight;
+    font.lfHeight = -MulDiv(9, dpi, 72);
+    font.lfWeight = FW_NORMAL;
     font.lfCharSet = DEFAULT_CHARSET;
     font.lfOutPrecision = OUT_OUTLINE_PRECIS;
     font.lfQuality = CLEARTYPE_QUALITY;

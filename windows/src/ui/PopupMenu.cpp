@@ -26,7 +26,7 @@ bool PopupMenu::Prepare(HWND owner,const POINT& anchor) {
     UINT dpi=UiDpi(tooltip_);
     if(!font_ || dpi!=dpi_) {
         // native-screenshot-tool uses 9 pt (12 logical pixels), not the body UI size.
-        HFONT replacement=CreateUiFont(dpi,12); if(!replacement) return false;
+        HFONT replacement=CreateUiFont(dpi); if(!replacement) return false;
         auto previous=font_; font_=replacement; dpi_=dpi;
         SendMessageW(tooltip_,WM_SETFONT,reinterpret_cast<WPARAM>(font_),TRUE);
         if(previous) DeleteObject(previous);
