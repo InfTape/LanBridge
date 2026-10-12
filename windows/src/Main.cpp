@@ -23,7 +23,7 @@
 namespace {
 constexpr UINT EventsMessage=WM_APP+1,TrayMessage=WM_APP+2;
 const UINT TaskbarCreatedMessage=RegisterWindowMessageW(L"TaskbarCreated");
-enum ControlId { Ip=100,Code,CopyLink,Disconnect,Text,SendText,SendClipboard,SendFile,OpenFolder,History,Recopy,Clear,Progress,Status,EnableMenu,DisableMenu,Startup,ResetPairing,SendFolder,Qr=200,Exit=900 };
+enum ControlId { Ip=100,Code,CopyLink,Disconnect,Text,SendText,SendClipboard,SendFile,OpenFolder,History,Recopy,Clear,Progress,Status,Startup=116,ResetPairing,SendFolder,Qr=200,Exit=900 };
 struct Record { bool file; std::wstring text; std::filesystem::path path; };
 class App {
     HWND window_=nullptr;
@@ -40,7 +40,6 @@ class App {
     std::thread sender_;
     std::thread integration_;
     std::atomic<bool> sending_{false};
-    std::atomic<bool> integrating_{false};
     std::deque<shelltransfer::Paths> pendingFiles_;
     HBRUSH background_=CreateSolidBrush(RGB(247,249,252));
     HBRUSH card_=CreateSolidBrush(RGB(255,255,255));
@@ -70,6 +69,7 @@ public:
         server_->Start(42831,code_);
         discovery_.Start(code_);
         ShowWindow(window_,show); UpdateWindow(window_);
+        EnsureContextMenu();
         if(!initial.empty()) AcceptFiles(initial);
         MSG m; while(GetMessageW(&m,nullptr,0,0)>0) { if(!IsDialogMessageW(window_,&m)) { TranslateMessage(&m); DispatchMessageW(&m); } }
         return static_cast<int>(m.wParam);
@@ -96,8 +96,6 @@ private:
         if(!titleBar_.Create(window_,GetModuleHandleW(nullptr))) throw std::runtime_error("无法创建标题栏");
         Control(L"STATIC",L"LanBridge",10);
         Control(L"STATIC",L"同一网络，随手互传。",11);
-        Control(L"BUTTON",L"启用右键发送",EnableMenu,WS_TABSTOP);
-        Control(L"BUTTON",L"移除右键发送",DisableMenu,WS_TABSTOP);
         Control(L"BUTTON",L"开机启动（默认收至托盘）",Startup,BS_AUTOCHECKBOX|WS_TABSTOP);
         try { startupEnabled_=startup::IsEnabled(startup::ExecutablePath()); }
         catch(const std::exception& e) { Queue({bridge::Event::Error,bridge::Wide(e.what())}); }
@@ -146,8 +144,7 @@ private:
         int right=w-364,editor=right-205;
         int qrEdge=std::clamp(h-448,208,246),afterQr=151+qrEdge;
         Place(10,32,22,300,38); Place(11,34,63,500,26);
-        Place(EnableMenu,w-360,32,155,33); Place(DisableMenu,w-195,32,155,33);
-        Place(Startup,w-360,68,310,24);
+        Place(Startup,w-350,38,310,24);
         Place(12,40,111,246,28); Place(Qr,40+(246-qrEdge)/2,151,qrEdge,qrEdge);
         Place(15,40,afterQr+5,246,28);
         Place(13,40,afterQr+42,80,25); Place(Ip,124,afterQr+38,162,240);
@@ -220,12 +217,10 @@ private:
         if(sending_ || pendingFiles_.empty() || !server_ || !server_->IsConnected()) return;
         auto paths = std::move(pendingFiles_.front()); pendingFiles_.pop_front(); Files(paths);
     }
-    void Integration(bool enable) {
-        if(integrating_.exchange(true)) { StatusText(L"正在更新右键菜单，请稍候"); return; }
-        if(integration_.joinable()) integration_.join();
-        StatusText(enable?L"正在启用 Windows 11 右键发送…":L"正在移除右键发送…");
-        for(int id:{EnableMenu,DisableMenu}) EnableWindow(Item(id),FALSE);
-        integration_ = std::thread([this,enable] {
+    void EnsureContextMenu() {
+        // Registration runs once for the primary process, independently of
+        // transfers. The script keeps an unchanged registration intact.
+        integration_ = std::thread([this] {
             std::filesystem::path log;
             try {
                 std::wstring module(32768,L'\0'); auto n=GetModuleFileNameW(nullptr,module.data(),static_cast<DWORD>(module.size()));
@@ -234,6 +229,13 @@ private:
                 // Keep the previously delivered desktop EXE usable beside its
                 // complete LanBridge project folder.
                 if(!std::filesystem::is_regular_file(script)) script=std::filesystem::path(module).parent_path()/L"LanBridge"/L"scripts"/L"register-context-menu.ps1";
+                // Support the standard source-tree build output as well.
+                if(!std::filesystem::is_regular_file(script)) {
+                    auto sourceRoot=std::filesystem::path(module).parent_path();
+                    for(int i=0;i<3 && !std::filesystem::is_regular_file(script);++i) {
+                        sourceRoot=sourceRoot.parent_path(); script=sourceRoot/L"scripts"/L"register-context-menu.ps1";
+                    }
+                }
                 if(!std::filesystem::is_regular_file(script)) throw std::runtime_error("请将便携包完整解压后再启用右键菜单");
                 wchar_t system[MAX_PATH]{},temporary[MAX_PATH]{};
                 GetSystemDirectoryW(system,MAX_PATH); GetTempPathW(MAX_PATH,temporary);
@@ -241,17 +243,18 @@ private:
                 log=std::filesystem::path(temporary)/(L"LanBridge-menu-"+std::wstring(token)+L".log");
                 auto powershell=std::filesystem::path(system)/L"WindowsPowerShell"/L"v1.0"/L"powershell.exe";
                 auto command=shelltransfer::QuoteArgument(powershell.wstring())+L" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "+shelltransfer::QuoteArgument(script.wstring())+
-                    L" -Action "+(enable?std::wstring(L"Enable"):std::wstring(L"Disable"))+L" -LogPath "+shelltransfer::QuoteArgument(log.wstring());
+                    L" -Action Enable -LogPath "+shelltransfer::QuoteArgument(log.wstring());
                 STARTUPINFOW startup{sizeof(startup)}; PROCESS_INFORMATION process{};
                 if(!CreateProcessW(powershell.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&process)) throw std::runtime_error("Cannot start menu registration");
                 CloseHandle(process.hThread); WaitForSingleObject(process.hProcess,INFINITE);
                 DWORD exitCode=1; GetExitCodeProcess(process.hProcess,&exitCode); CloseHandle(process.hProcess);
                 std::ifstream input(log,std::ios::binary); std::string output((std::istreambuf_iterator<char>(input)),{});
                 if(output.starts_with("\xEF\xBB\xBF")) output.erase(0,3);
-                Queue({exitCode?bridge::Event::Error:bridge::Event::Info,output.empty()?(exitCode?L"右键菜单更新失败，请查看使用说明":L"右键菜单已更新"):bridge::Wide(output)});
+                // A successful background check must not replace pairing or
+                // transfer progress with registration status.
+                if(exitCode) Queue({bridge::Event::Error,output.empty()?L"自动启用右键发送失败，请查看使用说明":bridge::Wide(output)});
             } catch(const std::exception& e) { Queue({bridge::Event::Error,bridge::Wide(e.what())}); }
             if(!log.empty()) DeleteFileW(log.c_str());
-            integrating_=false; Queue({bridge::Event::Info,L""});
         });
     }
     void SelectFiles() {
@@ -315,7 +318,6 @@ private:
             }
         }
         for(int id:{SendText,SendClipboard,SendFile,SendFolder}) EnableWindow(Item(id),!sending_);
-        for(int id:{EnableMenu,DisableMenu}) EnableWindow(Item(id),!integrating_);
         PumpFiles();
     }
     void Command(int id) {
@@ -336,8 +338,6 @@ private:
             } catch(const std::exception& e) { StatusText(bridge::Wide(e.what())); }
             break;
         }
-        case EnableMenu: Integration(true); break;
-        case DisableMenu: Integration(false); break;
         case Startup: {
             bool enabled=SendMessageW(Item(Startup),BM_GETCHECK,0,0)==BST_CHECKED;
             try {
@@ -428,8 +428,6 @@ private:
                 }
                 auto menu=CreatePopupMenu(); AppendMenuW(menu,MF_STRING,1,L"显示主窗口");
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
-                AppendMenuW(menu,MF_STRING|(app->integrating_?MF_GRAYED:0),EnableMenu,L"启用右键发送");
-                AppendMenuW(menu,MF_STRING|(app->integrating_?MF_GRAYED:0),DisableMenu,L"移除右键发送");
                 AppendMenuW(menu,MF_STRING|(app->startupEnabled_?MF_CHECKED:0),Startup,L"开机启动");
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr); AppendMenuW(menu,MF_STRING,Exit,L"退出");
                 auto id=app->popup_.Track(menu,h,p); DestroyMenu(menu);

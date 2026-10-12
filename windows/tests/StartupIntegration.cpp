@@ -103,6 +103,7 @@ int wmain(int argc,wchar_t** argv) {
         RegistryBackup backup; Process app; Launch(app,argv[1],true); WaitForInputIdle(app.handle,10000);
         for(int i=0;i<100 && !app.window;i++) { app.window=FindWindowW(L"LanBridgeWindow",nullptr); if(!app.window) Sleep(50); }
         Require(app.window && !IsWindowVisible(app.window),"Startup window stays hidden despite normal show command");
+        Require(!GetDlgItem(app.window,114) && !GetDlgItem(app.window,115),"Manual context-menu buttons removed");
         auto channel=Pair(app.window); Heartbeat(*channel);
         { Process duplicate; Launch(duplicate,argv[1],true); ExitSucceeded(duplicate); }
         Require(!IsWindowVisible(app.window) && WaitForSingleObject(app.handle,0)==WAIT_TIMEOUT,"Startup duplicate neither replaces nor reveals existing app"); Heartbeat(*channel);
