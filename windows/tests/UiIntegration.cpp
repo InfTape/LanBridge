@@ -70,6 +70,54 @@ int wmain(int argc,wchar_t** argv) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED); WSADATA ws; WSAStartup(MAKEWORD(2,2),&ws);
     try {
+        if(argc==3 && wcscmp(argv[1],L"--addresses")==0) {
+            Require(!FindWindowW(L"LanBridgeWindow",nullptr),"app already running"); Process p;
+            std::wstring command=L"\""+std::wstring(argv[2])+L"\" --startup";
+            STARTUPINFOW info{sizeof(info)};
+            Require(CreateProcessW(nullptr,command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&info,&p.pi)!=FALSE,"launch address refresh app");
+            WaitForInputIdle(p.pi.hProcess,10000);
+            for(int i=0;i<100 && !p.window;++i) { p.window=FindWindowW(L"LanBridgeWindow",nullptr); if(!p.window) Sleep(50); }
+            Require(p.window && !IsWindowVisible(p.window),"hidden startup window");
+            const auto originalCode=GetControl(p.window,101);
+            auto addresses=LocalAddresses();
+            const auto expected=!addresses.empty() && addresses.front().autoSelect?addresses.front().address:L"请选择局域网 IPv4 地址";
+            auto combo=GetDlgItem(p.window,100);
+            const auto stale=[&](const wchar_t* value) {
+                SendMessageW(combo,CB_RESETCONTENT,0,0); SendMessageW(combo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(value)); SendMessageW(combo,CB_SETCURSEL,0,0);
+                SendMessageW(p.window,WM_COMMAND,MAKEWPARAM(100,CBN_SELCHANGE),reinterpret_cast<LPARAM>(combo));
+            };
+            const auto refresh=[&](const std::wstring& value) {
+                PostMessageW(p.window,WM_APP+3,0,0);
+                for(int i=0;i<100 && GetControl(p.window,100)!=value;++i) Sleep(30);
+                Require(GetControl(p.window,100)==value,"network change restores current address");
+            };
+            stale(L"请选择局域网 IPv4 地址");
+            Require(!IsWindowEnabled(GetDlgItem(p.window,102)),"missing address disables copying invalid link");
+            refresh(expected);
+            Require(IsWindowEnabled(GetDlgItem(p.window,102))==(expected.find(L"地址")==std::wstring::npos),"QR readiness follows refreshed address");
+            // Keep a real encrypted session while refreshing the visible list.
+            SOCKET socket=::socket(AF_INET,SOCK_STREAM,IPPROTO_TCP); sockaddr_in endpoint{}; endpoint.sin_family=AF_INET; endpoint.sin_addr.s_addr=htonl(INADDR_LOOPBACK); endpoint.sin_port=htons(42831);
+            Require(connect(socket,reinterpret_cast<sockaddr*>(&endpoint),sizeof(endpoint))==0,"connect refresh client");
+            DWORD timeout=10000; setsockopt(socket,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<char*>(&timeout),sizeof(timeout));
+            Bytes greeting(20); int count=0; while(count<20) {int n=recv(socket,reinterpret_cast<char*>(greeting.data()+count),20-count,0); Require(n>0,"refresh greeting"); count+=n;}
+            Channel channel(socket,Utf8(originalCode),Bytes(greeting.begin()+4,greeting.end()),false);
+            channel.Send(1,Bytes{'A','d','d','r','e','s','s',' ','t','e','s','t'}); Require(channel.Receive().first==1,"refresh encrypted handshake");
+            for(const auto& address:addresses) if(!address.autoSelect) {
+                auto index=SendMessageW(combo,CB_FINDSTRINGEXACT,-1,reinterpret_cast<LPARAM>(address.address.c_str())); Require(index!=CB_ERR,"manual adapter listed");
+                SendMessageW(combo,CB_SETCURSEL,index,0); SendMessageW(p.window,WM_COMMAND,MAKEWPARAM(100,CBN_SELCHANGE),reinterpret_cast<LPARAM>(combo));
+                PostMessageW(p.window,WM_APP+3,0,0); Sleep(400);
+                Require(GetControl(p.window,100)==address.address,"refresh preserves explicit virtual adapter choice"); break;
+            }
+            stale(L"192.0.2.123"); refresh(expected);
+            stale(L"请选择局域网 IPv4 地址"); ShowWindow(p.window,SW_SHOWNOACTIVATE);
+            Require(GetControl(p.window,100)==expected,"opening hidden window repairs stale address immediately");
+            channel.Send(7);
+            while(true) {auto [type,data]=channel.Receive(); if(type==7) {channel.Send(8);continue;} Require(type==8,"encrypted connection survives address refresh");break;}
+            Require(GetControl(p.window,101)==originalCode,"refresh preserves pairing credential");
+            channel.Close();
+            std::cout<<"PASS: delayed LAN snapshot recovers, valid QR/link readiness, explicit virtual address preserved, removed address returns to physical default, window show refreshes, same encrypted connection and pairing survive; clipboard untouched"<<std::endl;
+            WSACleanup(); CoUninitialize(); return 0;
+        }
         if(argc==4 && wcscmp(argv[1],L"--qr")==0) { auto result=QrSnapshot(argv[2],argv[3]); WSACleanup(); CoUninitialize(); return result; }
         if(argc==3 && wcscmp(argv[1],L"--clipboard-file")==0) {
             ClipboardBackup backup; std::cout<<"READY"<<std::endl;

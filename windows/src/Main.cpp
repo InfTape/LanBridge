@@ -20,10 +20,14 @@
 #include <deque>
 #include <optional>
 #include <fstream>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <netioapi.h>
 #include "qrcodegen.hpp"
 
 namespace {
-constexpr UINT EventsMessage=WM_APP+1,TrayMessage=WM_APP+2;
+constexpr UINT EventsMessage=WM_APP+1,TrayMessage=WM_APP+2,AddressesMessage=WM_APP+3;
+constexpr UINT_PTR AddressesTimer=1,AddressesFallbackTimer=2;
 const UINT TaskbarCreatedMessage=RegisterWindowMessageW(L"TaskbarCreated");
 constexpr int ButtonHeight=32;
 constexpr int ActionButtonWidth=110;
@@ -60,10 +64,12 @@ class App {
     bool trayVersion4_=false;
     bool menuDeferred_=false;
     bool menuStarted_=false;
+    bool manualAddress_=false;
+    HANDLE addressNotification_=nullptr,interfaceNotification_=nullptr;
     ui::TitleBar titleBar_;
     ui::PopupMenu popup_;
 public:
-    ~App() { discovery_.Stop(); if(server_) server_->Stop(); if(sender_.joinable()) sender_.join(); if(integration_.joinable()) integration_.join(); if(font_) DeleteObject(font_); DeleteObject(background_); DeleteObject(card_); }
+    ~App() { StopAddressNotifications(); discovery_.Stop(); if(server_) server_->Stop(); if(sender_.joinable()) sender_.join(); if(integration_.joinable()) integration_.join(); if(font_) DeleteObject(font_); DeleteObject(background_); DeleteObject(card_); }
     int Run(HINSTANCE instance,int show,const shelltransfer::Paths& initial = {},bool startupLaunch=false) {
         folder_=bridge::ReceiveDirectory(); code_=pairing::LoadOrCreate(pairing::CredentialPath());
         WNDCLASSEXW wc{sizeof(wc)}; wc.lpfnWndProc=Proc; wc.hInstance=instance; wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
@@ -78,6 +84,9 @@ public:
         server_=std::make_unique<bridge::Server>(folder_,[this](bridge::Event e) { Queue(std::move(e)); });
         server_->Start(42831,code_);
         discovery_.Start(code_);
+        // Subscribe before the second snapshot to avoid losing an address
+        // assigned between window construction and notification registration.
+        StartAddressNotifications(); RefreshAddresses();
         // Logon may precede package/profile readiness. Never deploy a menu
         // from the login startup path; an explicit window open repairs it.
         menuDeferred_=startupLaunch;
@@ -115,9 +124,7 @@ private:
         Control(L"STATIC",L"配对二维码",Qr,SS_OWNERDRAW);
         Control(L"STATIC",L"电脑地址",13);
         Control(L"COMBOBOX",L"",Ip,CBS_DROPDOWNLIST|WS_VSCROLL|WS_TABSTOP);
-        auto addresses=bridge::LocalAddresses();
-        if(addresses.empty() || !addresses.front().autoSelect) SendMessageW(Item(Ip),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"请选择局域网 IPv4 地址"));
-        for(const auto& a:addresses) SendMessageW(Item(Ip),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(a.address.c_str()));
+        SendMessageW(Item(Ip),CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"请选择局域网 IPv4 地址"));
         SendMessageW(Item(Ip),CB_SETCURSEL,0,0);
         Control(L"STATIC",L"配对码（手动连接备用）",14);
         Control(L"EDIT",bridge::Wide(code_).c_str(),Code,ES_READONLY|ES_CENTER|WS_TABSTOP,WS_EX_CLIENTEDGE);
@@ -188,6 +195,51 @@ private:
         int n=GetWindowTextLengthW(Item(id)); std::wstring text(n+1,L'\0'); GetWindowTextW(Item(id),text.data(),n+1); text.resize(n); return text;
     }
     void StatusText(const std::wstring& s) { SetWindowTextW(Item(Status),s.c_str()); }
+    static VOID CALLBACK AddressChanged(PVOID context,PMIB_UNICASTIPADDRESS_ROW,MIB_NOTIFICATION_TYPE) {
+        PostMessageW(static_cast<HWND>(context),AddressesMessage,0,0);
+    }
+    static VOID CALLBACK InterfaceChanged(PVOID context,PMIB_IPINTERFACE_ROW,MIB_NOTIFICATION_TYPE) {
+        PostMessageW(static_cast<HWND>(context),AddressesMessage,0,0);
+    }
+    void StartAddressNotifications() {
+        const auto addresses=NotifyUnicastIpAddressChange(AF_INET,AddressChanged,window_,FALSE,&addressNotification_);
+        const auto interfaces=NotifyIpInterfaceChange(AF_INET,InterfaceChanged,window_,FALSE,&interfaceNotification_);
+        if(addresses!=NO_ERROR || interfaces!=NO_ERROR) SetTimer(window_,AddressesFallbackTimer,5000,nullptr);
+    }
+    void StopAddressNotifications() {
+        if(addressNotification_) { CancelMibChangeNotify2(addressNotification_); addressNotification_=nullptr; }
+        if(interfaceNotification_) { CancelMibChangeNotify2(interfaceNotification_); interfaceNotification_=nullptr; }
+    }
+    void RefreshAddresses() {
+        const auto addresses=bridge::LocalAddresses();
+        const auto previous=Value(Ip);
+        std::vector<std::wstring> items;
+        const bool automatic=!addresses.empty() && addresses.front().autoSelect;
+        if(!automatic) items.emplace_back(L"请选择局域网 IPv4 地址");
+        for(const auto& address:addresses) items.push_back(address.address);
+        auto pinned=std::find_if(addresses.begin(),addresses.end(),[&](const auto& address){return address.address==previous;});
+        if(manualAddress_ && pinned==addresses.end()) manualAddress_=false;
+        const auto selected=manualAddress_?previous:items.front();
+        const auto combo=Item(Ip);
+        bool changed=SendMessageW(combo,CB_GETCOUNT,0,0)!=static_cast<LRESULT>(items.size());
+        for(size_t i=0;!changed && i<items.size();++i) {
+            const auto length=SendMessageW(combo,CB_GETLBTEXTLEN,i,0);
+            if(length<0 || length>32768) { changed=true; break; }
+            std::wstring value(static_cast<size_t>(length)+1,L'\0');
+            SendMessageW(combo,CB_GETLBTEXT,i,reinterpret_cast<LPARAM>(value.data())); value.resize(static_cast<size_t>(length));
+            changed=value!=items[i];
+        }
+        if(changed) {
+            SendMessageW(combo,WM_SETREDRAW,FALSE,0); SendMessageW(combo,CB_RESETCONTENT,0,0);
+            for(const auto& item:items) SendMessageW(combo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(item.c_str()));
+        }
+        if(changed || previous!=selected) {
+            auto index=std::find(items.begin(),items.end(),selected)-items.begin();
+            SendMessageW(combo,CB_SETCURSEL,index,0);
+            if(changed) { SendMessageW(combo,WM_SETREDRAW,TRUE,0); InvalidateRect(combo,nullptr,TRUE); }
+            UpdateQr();
+        }
+    }
     std::wstring ConnectionUri() { return L"lanbridge://"+Value(Ip)+L":42831/"+bridge::Wide(code_); }
     void UpdateQr() {
         try {
@@ -195,6 +247,7 @@ private:
             if(address.empty() || address.find(L"地址")!=std::wstring::npos) { qr_.reset(); }
             else qr_=qrcodegen::QrCode::encodeText(bridge::Utf8(ConnectionUri()).c_str(),qrcodegen::QrCode::Ecc::MEDIUM);
         } catch(...) { qr_.reset(); }
+        EnableWindow(Item(CopyLink),qr_.has_value());
         InvalidateRect(Item(Qr),nullptr,TRUE);
     }
     void DrawQr(const DRAWITEMSTRUCT& item) {
@@ -320,6 +373,7 @@ private:
         std::deque<bridge::Event> queue; { std::lock_guard lock(eventMutex_); queue.swap(events_); }
         for(auto& e:queue) {
             switch(e.kind) {
+            case bridge::Event::Connected: RefreshAddresses(); if(!e.message.empty()) StatusText(e.message); break;
             case bridge::Event::Text: {
                 bool ok=bridge::CopyText(window_,e.message); RecordReceived({false,e.message,{}});
                 StatusText(ok?L"收到文本 · 已自动复制到剪贴板":L"收到文本 · 剪贴板暂时被占用，请点重新复制");
@@ -351,6 +405,7 @@ private:
     void Command(int id) {
         switch(id) {
         case CopyLink: {
+            if(!qr_) { StatusText(L"尚未发现可用的电脑地址，请等待局域网连接就绪"); break; }
             auto uri=ConnectionUri();
             StatusText(bridge::CopyText(window_,uri)?L"连接信息已复制，可粘贴到 Android 配对页":L"剪贴板被占用，请重试"); break;
         }
@@ -420,14 +475,17 @@ private:
         case WM_SETTEXT: { auto result=DefWindowProcW(h,m,w,l); InvalidateRect(h,nullptr,FALSE); return result; }
         case WM_CREATE: app->Create(); return 0;
         case WM_SHOWWINDOW:
-            if(w && app->menuDeferred_) { app->menuDeferred_=false; app->EnsureContextMenu(); }
+            if(w) {
+                app->RefreshAddresses();
+                if(app->menuDeferred_) { app->menuDeferred_=false; app->EnsureContextMenu(); }
+            }
             break;
         case WM_SIZE: if(w!=SIZE_MINIMIZED && app->font_) app->Layout(); return 0;
         case WM_GETMINMAXINFO: { auto p=reinterpret_cast<MINMAXINFO*>(l); p->ptMinTrackSize={app->S(WindowWidth),app->S(WindowHeight)}; return 0; }
         case WM_DPICHANGED: {
             app->dpi_=HIWORD(w); app->FontSetup(); auto r=reinterpret_cast<RECT*>(l); SetWindowPos(h,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE); app->Layout(); return 0;
         }
-        case WM_COMMAND: if(app->titleBar_.HandleCommand(LOWORD(w))) return 0; if(LOWORD(w)==Text && HIWORD(w)==EN_CHANGE) app->UpdateTextScrollbar(); else if(LOWORD(w)==Ip && HIWORD(w)==CBN_SELCHANGE) app->UpdateQr(); else if(LOWORD(w)==History && HIWORD(w)==LBN_DBLCLK) app->Command(Recopy); else if(HIWORD(w)==BN_CLICKED) app->Command(LOWORD(w)); return 0;
+        case WM_COMMAND: if(app->titleBar_.HandleCommand(LOWORD(w))) return 0; if(LOWORD(w)==Text && HIWORD(w)==EN_CHANGE) app->UpdateTextScrollbar(); else if(LOWORD(w)==Ip && HIWORD(w)==CBN_SELCHANGE) { app->manualAddress_=true; app->UpdateQr(); } else if(LOWORD(w)==History && HIWORD(w)==LBN_DBLCLK) app->Command(Recopy); else if(HIWORD(w)==BN_CLICKED) app->Command(LOWORD(w)); return 0;
         case WM_MEASUREITEM: if(app->popup_.Measure(*reinterpret_cast<MEASUREITEMSTRUCT*>(l))) return TRUE; break;
         case WM_DRAWITEM: {
             auto item=reinterpret_cast<DRAWITEMSTRUCT*>(l);
@@ -435,6 +493,13 @@ private:
             if(item->CtlID==Qr) { app->DrawQr(*item); return TRUE; } break;
         }
         case EventsMessage: app->Drain(); return 0;
+        case AddressesMessage:
+            if(!app->exiting_) SetTimer(h,AddressesTimer,250,nullptr);
+            return 0;
+        case WM_TIMER:
+            if(w==AddressesTimer) { KillTimer(h,AddressesTimer); app->RefreshAddresses(); return 0; }
+            if(w==AddressesFallbackTimer) { app->RefreshAddresses(); return 0; }
+            break;
         case WM_COPYDATA: {
             auto* data=reinterpret_cast<COPYDATASTRUCT*>(l);
             if(!data || data->dwData != shelltransfer::MessageId) return FALSE;
@@ -486,7 +551,7 @@ private:
         case WM_PAINT: {
             PAINTSTRUCT ps; auto dc=BeginPaint(h,&ps); app->Paint(dc); EndPaint(h,&ps); return 0;
         }
-        case WM_DESTROY: if(app->server_) app->server_->Stop(); if(app->sender_.joinable()) app->sender_.join(); Shell_NotifyIconW(NIM_DELETE,&app->tray_); PostQuitMessage(0); return 0;
+        case WM_DESTROY: app->StopAddressNotifications(); KillTimer(h,AddressesTimer); KillTimer(h,AddressesFallbackTimer); if(app->server_) app->server_->Stop(); if(app->sender_.joinable()) app->sender_.join(); Shell_NotifyIconW(NIM_DELETE,&app->tray_); PostQuitMessage(0); return 0;
         }
         return DefWindowProcW(h,m,w,l);
     }

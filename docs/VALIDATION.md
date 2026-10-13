@@ -1,5 +1,13 @@
 # 验证记录
 
+验证日期：2026-10-13。Windows 1.6.4 修复局域网地址及二维码未随网络就绪更新，Android 保持 1.4.0，菜单身份包不变。Windows Release 构建及全部 12 项集成测试通过，0 skipped。
+
+旧版仅在 WM_CREATE 读取 LocalAddresses，之后没有地址变化通知或重新打开窗口时的刷新。实际生产连接的本地地址为 192.168.0.102、手机为 192.168.0.100，而窗口仍显示占位提示；传输服务监听所有接口，故可以传文件但扫码界面过期。新版使用 NotifyUnicastIpAddressChange 和 NotifyIpInterfaceChange，仅将通知投递到 UI 线程，250 ms 合并刷新；订阅后立即读取地址避免初始化间隙，打开窗口及 Connected 事件也刷新。通知订阅失败时使用 5 秒定时回读，退出取消通知及定时器；回调不等待 UI，不从回调取消自己。实现参考 [IPv4 地址通知](https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-notifyunicastipaddresschange) 和 [网卡变化通知](https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-notifyipinterfacechange)。
+
+新增 AddressRefreshIntegration 通过实际隐藏主程序及真实加密 TCP 会话，模拟控件仍持有启动时占位列表并投递生产刷新消息，验证恢复当前系统地址、二维码/复制按钮可用状态、保留明确选中的真实虚拟网卡地址、失效地址恢复真实局域网默认值，以及打开窗口立即刷新。配对码保持一致、原加密连接继续交换心跳，整个用例不改写剪贴板。此测试没有禁用实际 Wi-Fi 或人为改变网卡 IP，不声称实测过 DHCP 换址全过程。原有 11 项测试全部通过，包括无有效菜单记录时启动仅一个进程的审计。
+
+正式桌面 EXE 已更新并打开窗口，原生控件检查显示当前选择 192.168.0.102，列表包含 Wi-Fi、VPN 和 VMware 地址，默认为真实 Wi-Fi；发送控件可用。Windows 本地配对文件修改时间仍为更新前的 2026-10-12，开机启动命令保持正式 EXE 加 --startup。便携包同步更新；地址刷新本身不执行菜单部署或重启服务。
+
 验证日期：2026-10-13。Windows 1.6.3 修复实际登录启动仍启动辅助进程的问题，Android 和菜单身份包不变。Windows Release 构建及全部 11 项集成测试通过，0 skipped。
 
 读取管理员保护的 WDI StartupInfo 后确认，22:32 开机时 1.6.2 主程序确实调用注册脚本，产生 PowerShell 和 Conhost；同一批历史文件保留了更早版本的 csc/cvtres。此前仅根据当前进程和记录时间推断全部是旧统计并不成立。代码路径是在一次 IsCurrent 返回 false 后立即注册；该次原生检查的具体失败原因未记录。本次开机模式完全不调用菜单检查或注册，不再依赖登录阶段包查询是否已就绪。用户明确打开主窗口后才自动检查，必要时注册一次；已注册菜单持续可用。
