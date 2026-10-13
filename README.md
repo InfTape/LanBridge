@@ -1,6 +1,6 @@
 # LanBridge · Windows / Android 局域网互传
 
-桌面项目包含完整源码和可运行文件。Windows 当前版本 1.6.1，Android 版本 1.4.0。支持首次扫码绑定、后续自动重连、手机分享后自动发送，以及默认自动启用的 Windows 11 第一层右键菜单“发送到手机”。新增双向文件夹传输，保留目录层级、空目录和空文件；使用原有加密连接，无需压缩成 ZIP。保留 Android 16 网络绑定限制兼容及前台服务启动顺序修复。
+桌面项目包含完整源码和可运行文件。Windows 当前版本 1.6.2，Android 版本 1.4.0。支持首次扫码绑定、后续自动重连、手机分享后自动发送，以及默认自动启用的 Windows 11 第一层右键菜单“发送到手机”。新增双向文件夹传输，保留目录层级、空目录和空文件；使用原有加密连接，无需压缩成 ZIP。保留 Android 16 网络绑定限制兼容及前台服务启动顺序修复。
 
 - **Windows**：C++20，纯 Win32 API 窗口与标准控件，原生 DPI 缩放、托盘、文件对话框和拖放；网络使用 Winsock2，加密使用 BCrypt。界面参考 `native-screenshot-tool` 的中文原生控件设计。
 - **Android**：Kotlin + Jetpack Compose BOM 2026.09.00 + Material 3 Expressive 1.5.0-beta01，实际使用 `MaterialExpressiveTheme`、动态配色、Expressive 动效与加载组件，支持深色模式和宽屏双栏。Material 3 Expressive 当前使用 Beta API。
@@ -48,6 +48,8 @@ Windows 主窗口、内容标题、按钮、标题栏、托盘菜单和提示统
 便携目录移动后，在新位置打开程序并勾选开机启动以更新路径；删除程序前先取消勾选。如果曾在 Windows 任务管理器中单独禁用 LanBridge 的启动项，需要在任务管理器中重新启用。开机启动只启动 Windows 程序，已绑定手机打开应用后自动重连。
 
 ## Windows 11 右键发送
+
+1.6.2 使用 Win32 API 检查当前用户实际注册的菜单包、外部目录、菜单包 SHA-256 和证书信任。配置完整且未变化时直接跳过注册，正常启动只运行 LanBridge.exe，不启动 PowerShell、控制台宿主或编译器。首次启用、菜单被移除、菜单包更新或便携目录移动时才运行注册脚本。旧版升级后首次运行会补写原生检查记录，此后直接检查；已有证书信任时不重复申请管理员授权。菜单刷新使用原生 SHChangeNotify，手动注册也不再动态编译 C#。
 
 完整解压 `LanBridge-Windows-portable.zip`，保留 `LanBridge.exe`、`LanBridgeShell.dll`、`context-menu` 和 `scripts` 在同一目录。打开程序后默认在后台自动启用右键发送，主窗口和托盘不再提供启用/移除按钮。已启用且目录位置、菜单包未变化时，不重复注册、不重启传输进程；后台检查成功不会覆盖传输进度。首次运行尚未信任菜单签名的电脑会弹出 Windows 管理员授权，用于信任本机生成的菜单包签名证书。证书仅加入 `LocalMachine/TrustedPeople`，不是根 CA；菜单身份包注册到当前用户。拒绝授权或便携包缺失文件时会显示失败原因，仍可使用应用内传输，修复后重启程序重新尝试。
 

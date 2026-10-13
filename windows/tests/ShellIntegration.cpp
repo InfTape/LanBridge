@@ -1,6 +1,7 @@
 #include "Bridge.h"
 #include "FolderTransfer.h"
 #include "ShellTransfer.h"
+#include "ContextMenu.h"
 #include <shobjidl.h>
 #include <shlobj.h>
 #include <shellapi.h>
@@ -71,10 +72,14 @@ IExplorerCommand* RegisteredCommand() {
     }
     return command;
 }
-void StartApp(Process& app,const wchar_t* executable,const std::wstring& arguments={}) {
+void StartApp(Process& app,const wchar_t* executable,const std::wstring& arguments={},HANDLE job=nullptr) {
     auto launch=shelltransfer::QuoteArgument(executable)+arguments; STARTUPINFOW startup{sizeof(startup)};
     startup.dwFlags=STARTF_USESHOWWINDOW; startup.wShowWindow=SW_HIDE;
-    Require(CreateProcessW(executable,launch.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&startup,&app.info)!=FALSE,"Start primary process");
+    Require(CreateProcessW(executable,launch.data(),nullptr,nullptr,FALSE,job?CREATE_SUSPENDED:0,nullptr,nullptr,&startup,&app.info)!=FALSE,"Start primary process");
+    if(job) {
+        if(!AssignProcessToJobObject(job,app.info.hProcess)) { TerminateProcess(app.info.hProcess,1); Require(false,"Assign startup process audit job"); }
+        ResumeThread(app.info.hThread);
+    }
     WaitForInputIdle(app.info.hProcess,10000);
     for(int i=0;i<100 && !app.window;i++) { app.window=FindWindowW(L"LanBridgeWindow",nullptr); if(!app.window) Sleep(50); }
     Require(app.window!=nullptr,"Primary window");
@@ -152,13 +157,50 @@ void CheckFolderInvoke(IExplorerCommand* command,bridge::Channel& channel,const 
 int wmain(int argc,wchar_t** argv) {
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED); WSADATA winsock{}; WSAStartup(MAKEWORD(2,2),&winsock);
     try {
+        if(argc==3 && wcscmp(argv[1],L"--menu-current")==0) {
+            Require(contextmenu::IsCurrent(argv[2]),"Native registration, external path, package hash and certificate trust check");
+            std::cout<<"PASS: native menu registration check is current; no child processes or COM activation"<<std::endl; return 0;
+        }
+        if(argc==3 && wcscmp(argv[1],L"--menu-cache-test")==0) {
+            if(!contextmenu::IsCurrent(argv[2])) { std::cout<<"SKIP: installed native receipt required"<<std::endl; return 77; }
+            struct ReceiptProbe {
+                HKEY original=nullptr,value=nullptr; std::wstring path;
+                ~ReceiptProbe(){if(original) RegCloseKey(original); if(value) RegCloseKey(value); if(path.starts_with(L"Software\\LanBridge\\ContextMenuTest-{")) RegDeleteKeyW(HKEY_CURRENT_USER,path.c_str());}
+            } probe;
+            GUID id{}; CoCreateGuid(&id); wchar_t token[40]{}; StringFromGUID2(id,token,40); probe.path=L"Software\\LanBridge\\ContextMenuTest-"+std::wstring(token);
+            Require(RegOpenKeyExW(HKEY_CURRENT_USER,contextmenu::ReceiptKey,0,KEY_READ,&probe.original)==ERROR_SUCCESS,"Read production receipt without mutations");
+            Require(RegCreateKeyExW(HKEY_CURRENT_USER,probe.path.c_str(),0,nullptr,0,KEY_ALL_ACCESS,nullptr,&probe.value,nullptr)==ERROR_SUCCESS,"Create isolated native receipt");
+            auto restore=[&]{Require(RegCopyTreeW(probe.original,nullptr,probe.value)==ERROR_SUCCESS,"Copy native receipt");};
+            auto text=[&](const wchar_t* name,const std::wstring& value){Require(RegSetValueExW(probe.value,name,0,REG_SZ,reinterpret_cast<const BYTE*>(value.c_str()),static_cast<DWORD>((value.size()+1)*sizeof(wchar_t)))==ERROR_SUCCESS,"Change isolated receipt");};
+            restore(); Require(contextmenu::IsCurrent(argv[2],probe.path),"Valid receipt verifies actual package and trust");
+            text(L"Location",std::filesystem::path(argv[2]).parent_path().wstring()); Require(!contextmenu::IsCurrent(argv[2],probe.path),"Moved directory requires repair");
+            restore(); text(L"PackageHash",std::wstring(64,L'0')); Require(!contextmenu::IsCurrent(argv[2],probe.path),"Changed package requires repair");
+            restore(); text(L"PackageFullName",L"LanBridge.ContextMenu_0.0.0.1_x64__gbp67vc7xcpc2"); Require(!contextmenu::IsCurrent(argv[2],probe.path),"Nonregistered package cannot pass cache");
+            restore(); text(L"Thumbprint",std::wstring(40,L'0')); Require(!contextmenu::IsCurrent(argv[2],probe.path),"Different certificate requires repair");
+            restore(); DWORD schema=2; RegSetValueExW(probe.value,L"Schema",0,REG_DWORD,reinterpret_cast<BYTE*>(&schema),sizeof(schema)); Require(!contextmenu::IsCurrent(argv[2],probe.path),"Unknown receipt version requires repair");
+            restore(); RegSetValueExW(probe.value,L"Location",0,REG_DWORD,reinterpret_cast<BYTE*>(&schema),sizeof(schema)); Require(!contextmenu::IsCurrent(argv[2],probe.path),"Wrong registry type requires repair");
+            restore(); RegDeleteValueW(probe.value,L"PackageHash"); Require(!contextmenu::IsCurrent(argv[2],probe.path),"Incomplete receipt requires repair");
+            Require(!contextmenu::IsCurrent(std::filesystem::path(argv[2])/L"missing"),"Missing bundle cannot pass cache");
+            std::cout<<"PASS: actual native registration, cache invalidation for moved/changed/missing/unregistered/untrusted/invalid receipts; production state untouched"<<std::endl; return 0;
+        }
+        if(argc==4 && wcscmp(argv[1],L"--menu-startup")==0) {
+            if(!contextmenu::IsCurrent(argv[3])) { std::cout<<"SKIP: installed native receipt required"<<std::endl; return 77; }
+            Require(!FindWindowW(L"LanBridgeWindow",nullptr),"Startup audit requires app closed");
+            struct Job {HANDLE value=CreateJobObjectW(nullptr,nullptr); ~Job(){if(value) CloseHandle(value);}} job;
+            Require(job.value!=nullptr,"Create startup process audit job"); Process app; StartApp(app,argv[2],L" --startup",job.value);
+            auto channel=Pair(app.window); for(int i=0;i<6;++i){Sleep(500);Heartbeat(*channel);}
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
+            Require(QueryInformationJobObject(job.value,JobObjectBasicAccountingInformation,&accounting,sizeof(accounting),nullptr)!=FALSE,"Read all startup processes including exited children");
+            Require(accounting.TotalProcesses==1 && accounting.ActiveProcesses==1,"Normal startup must create only the main process");
+            Alive(app); channel->Close(); std::cout<<"PASS: native startup created exactly one process; no PowerShell/compiler/refresh child; hidden window and encrypted connection healthy"<<std::endl; return 0;
+        }
         if(argc==3 && wcscmp(argv[1],L"--auto-menu")==0) {
             Require(!FindWindowW(L"LanBridgeWindow",nullptr),"Automatic menu test requires app closed");
             Temporary bundle;
             auto executable=bundle.path/L"LanBridge.exe", marker=bundle.path/L"auto-registration.txt";
             std::filesystem::copy_file(argv[2],executable); std::filesystem::create_directory(bundle.path/L"scripts");
             std::ofstream(bundle.path/L"scripts"/L"register-context-menu.ps1") <<
-                "param([string]$Action,[string]$LogPath)\n"
+                "param([string]$Action,[string]$LogPath,[switch]$NoShellRefresh)\n"
                 "if($Action -ne 'Enable') { exit 1 }\n"
                 "[IO.File]::AppendAllText((Join-Path $PSScriptRoot '../auto-registration.txt'),'Enabled')\n"
                 "[IO.File]::WriteAllText($LogPath,'OK')\n";

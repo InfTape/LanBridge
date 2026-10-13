@@ -2,6 +2,7 @@
 #include "ShellTransfer.h"
 #include "Startup.h"
 #include "Pairing.h"
+#include "ContextMenu.h"
 #include "AppIcon.h"
 #include "ui/UiTypography.h"
 #include "ui/TitleBar.h"
@@ -236,8 +237,8 @@ private:
         auto paths = std::move(pendingFiles_.front()); pendingFiles_.pop_front(); Files(paths);
     }
     void EnsureContextMenu() {
-        // Registration runs once for the primary process, independently of
-        // transfers. The script keeps an unchanged registration intact.
+        // Normal startup uses only native queries. Deploy only when the
+        // package, external directory, signature trust or receipt needs repair.
         integration_ = std::thread([this] {
             std::filesystem::path log;
             try {
@@ -255,13 +256,14 @@ private:
                     }
                 }
                 if(!std::filesystem::is_regular_file(script)) throw std::runtime_error("请将便携包完整解压后再启用右键菜单");
+                if(contextmenu::IsCurrent(script.parent_path().parent_path())) return;
                 wchar_t system[MAX_PATH]{},temporary[MAX_PATH]{};
                 GetSystemDirectoryW(system,MAX_PATH); GetTempPathW(MAX_PATH,temporary);
                 GUID guid{}; CoCreateGuid(&guid); wchar_t token[40]{}; StringFromGUID2(guid,token,40);
                 log=std::filesystem::path(temporary)/(L"LanBridge-menu-"+std::wstring(token)+L".log");
                 auto powershell=std::filesystem::path(system)/L"WindowsPowerShell"/L"v1.0"/L"powershell.exe";
                 auto command=shelltransfer::QuoteArgument(powershell.wstring())+L" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "+shelltransfer::QuoteArgument(script.wstring())+
-                    L" -Action Enable -LogPath "+shelltransfer::QuoteArgument(log.wstring());
+                    L" -Action Enable -NoShellRefresh -LogPath "+shelltransfer::QuoteArgument(log.wstring());
                 STARTUPINFOW startup{sizeof(startup)}; PROCESS_INFORMATION process{};
                 if(!CreateProcessW(powershell.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&process)) throw std::runtime_error("Cannot start menu registration");
                 CloseHandle(process.hThread); WaitForSingleObject(process.hProcess,INFINITE);
@@ -271,6 +273,7 @@ private:
                 // A successful background check must not replace pairing or
                 // transfer progress with registration status.
                 if(exitCode) Queue({bridge::Event::Error,output.empty()?L"自动启用右键发送失败，请查看使用说明":bridge::Wide(output)});
+                else contextmenu::Refresh();
             } catch(const std::exception& e) { Queue({bridge::Event::Error,bridge::Wide(e.what())}); }
             if(!log.empty()) DeleteFileW(log.c_str());
         });
@@ -485,6 +488,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
     try {
         int argc=0; auto argv=CommandLineToArgvW(GetCommandLineW(),&argc);
         if(!argv) return 1;
+        if(argc==2 && wcscmp(argv[1],L"--refresh-shell")==0) { LocalFree(argv); contextmenu::Refresh(); return 0; }
         startupLaunch=argc==2 && CompareStringOrdinal(argv[1],-1,L"--startup",-1,TRUE)==CSTR_EQUAL;
         bool valid=argc==1 || startupLaunch || (argc==3 && wcscmp(argv[1],L"--send-request")==0);
         std::filesystem::path request=argc==3?argv[2]:L""; LocalFree(argv);

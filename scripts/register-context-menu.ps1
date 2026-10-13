@@ -1,6 +1,7 @@
 ﻿param(
     [ValidateSet('Enable','Disable')][string]$Action = 'Enable',
-    [string]$LogPath = ''
+    [string]$LogPath = '',
+    [switch]$NoShellRefresh
 )
 $ErrorActionPreference = 'Stop'
 # Native CreateProcess does not sanitize a PowerShell 7 parent's module path
@@ -11,6 +12,7 @@ $subject = 'CN=LanBridge Desktop Context Menu'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $stateFolder = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'LanBridge'
 $statePath = Join-Path $stateFolder 'context-menu-state.json'
+$nativeReceiptKey = 'Software\LanBridge\ContextMenu'
 $priorState = $null
 $importedThumbprint = $null
 function Set-MenuTrust([string]$TrustAction, [string]$Thumbprint) {
@@ -69,6 +71,16 @@ try {
         New-Item -ItemType Directory -Path $stateFolder -Force | Out-Null
         @{ Thumbprint=$certificate.Thumbprint; OwnedTrust=$ownedTrust; Location=$projectRoot; PackageHash=$packageHash; PackageFullName=$registered[0].PackageFullName } |
             ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
+        # Typed native receipt allows later launches to verify the actual
+        # package, external path, hash and trust without starting PowerShell.
+        $receipt = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($nativeReceiptKey)
+        try {
+            $receipt.SetValue('Schema',0,[Microsoft.Win32.RegistryValueKind]::DWord)
+            foreach ($entry in @{Location=$projectRoot; PackageHash=$packageHash; PackageFullName=$registered[0].PackageFullName; Thumbprint=$certificate.Thumbprint}.GetEnumerator()) {
+                $receipt.SetValue($entry.Key,[string]$entry.Value,[Microsoft.Win32.RegistryValueKind]::String)
+            }
+            $receipt.SetValue('Schema',1,[Microsoft.Win32.RegistryValueKind]::DWord)
+        } finally { $receipt.Close() }
     } else {
         Get-AppxPackage -Name $packageName | Remove-AppxPackage
         if ($priorState -and $priorState.OwnedTrust -and $priorState.Thumbprint -match '^[0-9A-Fa-f]{40}$') {
@@ -79,9 +91,15 @@ try {
             }
         }
         if (Test-Path -LiteralPath $statePath) { Remove-Item -LiteralPath $statePath }
+        [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($nativeReceiptKey,$false)
     }
-    Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class LanBridgeShellRefresh { [DllImport("shell32.dll")] public static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2); }'
-    [LanBridgeShellRefresh]::SHChangeNotify(0x08000000,0,[IntPtr]::Zero,[IntPtr]::Zero)
+    if (!$NoShellRefresh) {
+        $refreshExecutable = Join-Path $projectRoot 'LanBridge.exe'
+        if (Test-Path -LiteralPath $refreshExecutable -PathType Leaf) {
+            $refresh = Start-Process -FilePath $refreshExecutable -ArgumentList '--refresh-shell' -WindowStyle Hidden -PassThru -Wait
+            if ($refresh.ExitCode -ne 0) { throw '原生右键菜单刷新失败。' }
+        }
+    }
     if ($Action -eq 'Enable') {
         if ($alreadyRegistered) { Finish-Result '右键发送已启用，无需重复注册。' 0 }
         Finish-Result '已启用：右键文件或文件夹 → 发送到手机。菜单未刷新时，关闭并重新打开资源管理器窗口。' 0

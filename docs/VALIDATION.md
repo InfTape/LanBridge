@@ -1,5 +1,18 @@
 # 验证记录
 
+验证日期：2026-10-13。Windows 1.6.2 优化右键菜单启动检查，Android 保持 1.4.0，菜单身份包保持 1.6.0.0。Windows Release 构建通过，11 项集成测试全部通过，0 skipped。以下为本次验证，后文保留此前版本记录。
+
+| 本次启动检查 | 结果 |
+| --- | --- |
+| 原生菜单检查 | 使用正式桌面便携目录、当前用户实际注册的包、有效外部路径和 LocalMachine/TrustedPeople 证书验证通过；检查过程不启动脚本或 COM 宿主 |
+| 失效记录处理 | 在独立临时 HKCU 测试键验证有效记录，以及目录移动、菜单包摘要变化、包版本不存在、证书指纹错误、未知记录版本、错误注册表类型、缺失字段和缺失目录；失效时均返回需要注册，结束删除测试键，不修改生产记录 |
+| 正常启动进程审计 | 将实际主程序以挂起状态加入 Windows Job 后恢复，以 --startup 隐藏启动并建立加密连接；3 秒心跳检查后 Job 累计产生进程数及活动进程数均为 1，已退出的短命子进程也计入累计数量，确认未启动 PowerShell、csc、cvtres 或刷新辅助进程 |
+| 首次注册回归 | 隔离便携目录的 AutoContextMenuIntegration 验证失效检查仍调用 Enable；重复实例不再次注册，同一加密连接保持正常 |
+| 正式已注册菜单 | 30 次真实 COM 菜单激活、两次手动 Enable，以及已注册菜单多文件和目录 Invoke 通过，内容 SHA-256 一致；原主进程和配对连接保持，主程序仍无包身份，剪贴板未改写 |
+| 原有功能回归 | FolderIntegration、PairingIntegration、RememberedDesktopIntegration、StartupIntegration、ShellIntegration、ShellSelectionIntegration、AutoContextMenuIntegration、NativeContextMenuIntegration、NativeMenuStartupIntegration、BridgeIntegration、UiIntegration 全部通过 |
+
+手动 Enable 使用 LanBridge.exe --refresh-shell 调用原生 SHChangeNotify；主程序自动注册后在自身进程刷新。注册脚本已移除 Add-Type，不再动态编译 C#。本机从旧版 JSON 记录补写原生 HKCU 记录时，已有部署和证书得到复用，没有注销重装菜单。本次未重新启动或登录 Windows，因此不声称任务管理器已清除旧启动记录或重新评定启动影响。
+
 Windows 1.6.1 默认自动启用右键发送：已移除主窗口及托盘中的启用/移除入口，首次主进程启动在后台执行原有幂等注册脚本，重复启动只转交已有实例。菜单身份包仍为 1.6.0.0，Android 保持 1.4.0。后台检查成功不覆盖连接和传输状态，注册失败显示原因。Windows Release 构建及 9 项集成测试通过，其中 AutoContextMenuIntegration 使用隔离便携目录和注册脚本探针，验证实际主程序自动调用 Enable、隐藏自启动、按钮移除、重复启动不再调用注册且同一加密连接心跳正常；StartupIntegration 同时确认原按钮已不存在。已注册 COM 的连接与发送检查另行使用正式签名菜单组件，保留原有身份隔离。
 
 正式桌面程序启动后自动注册检查完成，本机手机自动重连。随后执行真实已注册 COM 的标题、图标、ZIP 和文件/目录混合选择检查，前后保持同一主进程 PID、手机 TCP 端口及连接创建时间；不发送测试内容、不改写剪贴板。用于独立加密客户端的 registered-live 用例本次被已连接手机占用单设备会话而无法握手，改用上述生产手机连接下的只读 COM 检查；旧版完整 registered-live 发送记录保留。
