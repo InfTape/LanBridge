@@ -204,16 +204,27 @@ int wmain(int argc,wchar_t** argv) {
                 "if($Action -ne 'Enable') { exit 1 }\n"
                 "[IO.File]::AppendAllText((Join-Path $PSScriptRoot '../auto-registration.txt'),'Enabled')\n"
                 "[IO.File]::WriteAllText($LogPath,'OK')\n";
-            Process app; StartApp(app,executable.c_str(),L" --startup");
+            struct Job {HANDLE value=CreateJobObjectW(nullptr,nullptr); ~Job(){if(value) CloseHandle(value);}} job;
+            Require(job.value!=nullptr,"Create startup process audit job");
+            Process app; StartApp(app,executable.c_str(),L" --startup",job.value);
             Require(!IsWindowVisible(app.window) && !GetDlgItem(app.window,114) && !GetDlgItem(app.window,115),"Automatic menu launch stays hidden without manual buttons");
             auto channel=Pair(app.window);
+            for(int i=0;i<6;++i) {Sleep(500); Heartbeat(*channel);}
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
+            Require(QueryInformationJobObject(job.value,JobObjectBasicAccountingInformation,&accounting,sizeof(accounting),nullptr)!=FALSE,"Read startup process audit");
+            Require(accounting.TotalProcesses==1 && accounting.ActiveProcesses==1 && !std::filesystem::exists(marker),"Unregistered startup cannot create registration children");
+            { Process manual; StartApp(manual,executable.c_str()); Require(WaitForSingleObject(manual.info.hProcess,10000)==WAIT_OBJECT_0,"Manual open forwards to existing app"); manual.window=nullptr; }
+            Require(IsWindowVisible(app.window),"Manual open reveals original startup window");
             for(int i=0;i<300 && !std::filesystem::exists(marker);++i) { if(i%20==0) Heartbeat(*channel); Sleep(100); }
-            Require(std::filesystem::exists(marker),"Primary startup automatically invokes menu registration");
+            Require(std::filesystem::exists(marker),"Explicit open automatically invokes deferred menu registration");
             { Process duplicate; StartApp(duplicate,executable.c_str(),L" --startup"); Require(WaitForSingleObject(duplicate.info.hProcess,10000)==WAIT_OBJECT_0,"Duplicate startup exits"); duplicate.window=nullptr; }
             Sleep(500); Alive(app); Heartbeat(*channel);
             std::ifstream input(marker); std::string content((std::istreambuf_iterator<char>(input)),{});
             Require(content=="Enabled","Menu registration runs only in primary instance");
-            channel->Close(); std::cout<<"PASS: primary startup automatically enables menu, manual buttons absent, duplicate startup preserves connection without rerunning registration; no real registration or clipboard changes"<<std::endl;
+            ShowWindow(app.window,SW_HIDE); ShowWindow(app.window,SW_SHOW); Sleep(200); Heartbeat(*channel);
+            std::ifstream repeated(marker); std::string repeatedContent((std::istreambuf_iterator<char>(repeated)),{});
+            Require(repeatedContent=="Enabled","Repeated window open cannot rerun registration");
+            channel->Close(); std::cout<<"PASS: unregistered startup creates exactly one process; explicit open enables deferred menu once, duplicate startup and repeated open preserve connection; no real registration or clipboard changes"<<std::endl;
             WSACleanup(); CoUninitialize(); return 0;
         }
         Temporary temporary; auto a=temporary.path/L"中文 file & one.bin", b=temporary.path/L"second.bin";

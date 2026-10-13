@@ -58,11 +58,13 @@ class App {
     bool startupEnabled_=false;
     bool updatingTextScroll_=false;
     bool trayVersion4_=false;
+    bool menuDeferred_=false;
+    bool menuStarted_=false;
     ui::TitleBar titleBar_;
     ui::PopupMenu popup_;
 public:
     ~App() { discovery_.Stop(); if(server_) server_->Stop(); if(sender_.joinable()) sender_.join(); if(integration_.joinable()) integration_.join(); if(font_) DeleteObject(font_); DeleteObject(background_); DeleteObject(card_); }
-    int Run(HINSTANCE instance,int show,const shelltransfer::Paths& initial = {}) {
+    int Run(HINSTANCE instance,int show,const shelltransfer::Paths& initial = {},bool startupLaunch=false) {
         folder_=bridge::ReceiveDirectory(); code_=pairing::LoadOrCreate(pairing::CredentialPath());
         WNDCLASSEXW wc{sizeof(wc)}; wc.lpfnWndProc=Proc; wc.hInstance=instance; wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
         wc.hIcon=LoadAppIcon(GetSystemMetricsForDpi(SM_CXICON,GetDpiForSystem())); wc.hIconSm=LoadAppIcon(GetSystemMetricsForDpi(SM_CXSMICON,GetDpiForSystem())); wc.lpszClassName=L"LanBridgeWindow";
@@ -76,8 +78,11 @@ public:
         server_=std::make_unique<bridge::Server>(folder_,[this](bridge::Event e) { Queue(std::move(e)); });
         server_->Start(42831,code_);
         discovery_.Start(code_);
+        // Logon may precede package/profile readiness. Never deploy a menu
+        // from the login startup path; an explicit window open repairs it.
+        menuDeferred_=startupLaunch;
         ShowWindow(window_,show); UpdateWindow(window_);
-        EnsureContextMenu();
+        if(!startupLaunch) EnsureContextMenu();
         if(!initial.empty()) AcceptFiles(initial);
         MSG m; while(GetMessageW(&m,nullptr,0,0)>0) { if(!IsDialogMessageW(window_,&m)) { TranslateMessage(&m); DispatchMessageW(&m); } }
         return static_cast<int>(m.wParam);
@@ -237,6 +242,8 @@ private:
         auto paths = std::move(pendingFiles_.front()); pendingFiles_.pop_front(); Files(paths);
     }
     void EnsureContextMenu() {
+        if(menuStarted_) return;
+        menuStarted_=true;
         // Normal startup uses only native queries. Deploy only when the
         // package, external directory, signature trust or receipt needs repair.
         integration_ = std::thread([this] {
@@ -412,6 +419,9 @@ private:
         case WM_ACTIVATE: InvalidateRect(h,nullptr,FALSE); break;
         case WM_SETTEXT: { auto result=DefWindowProcW(h,m,w,l); InvalidateRect(h,nullptr,FALSE); return result; }
         case WM_CREATE: app->Create(); return 0;
+        case WM_SHOWWINDOW:
+            if(w && app->menuDeferred_) { app->menuDeferred_=false; app->EnsureContextMenu(); }
+            break;
         case WM_SIZE: if(w!=SIZE_MINIMIZED && app->font_) app->Layout(); return 0;
         case WM_GETMINMAXINFO: { auto p=reinterpret_cast<MINMAXINFO*>(l); p->ptMinTrackSize={app->S(WindowWidth),app->S(WindowHeight)}; return 0; }
         case WM_DPICHANGED: {
@@ -508,6 +518,6 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED); INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_STANDARD_CLASSES|ICC_PROGRESS_CLASS}; InitCommonControlsEx(&controls);
     int result=1;
-    try { App app; result=app.Run(instance,startupLaunch?SW_HIDE:show,initial); } catch(const std::exception& e) { MessageBoxW(nullptr,bridge::Wide(e.what()).c_str(),L"LanBridge",MB_ICONERROR); }
+    try { App app; result=app.Run(instance,startupLaunch?SW_HIDE:show,initial,startupLaunch); } catch(const std::exception& e) { MessageBoxW(nullptr,bridge::Wide(e.what()).c_str(),L"LanBridge",MB_ICONERROR); }
     CoUninitialize(); if(mutex) CloseHandle(mutex); return result;
 }
