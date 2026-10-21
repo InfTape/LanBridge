@@ -51,7 +51,8 @@ class App {
     std::thread sender_;
     std::thread integration_;
     std::atomic<bool> sending_{false};
-    std::deque<shelltransfer::Paths> pendingFiles_;
+    struct PendingSend { std::function<void()> work; size_t count; };
+    std::deque<PendingSend> pendingSends_;
     HBRUSH background_=CreateSolidBrush(RGB(247,249,252));
     HBRUSH card_=CreateSolidBrush(RGB(255,255,255));
     NOTIFYICONDATAW tray_{};
@@ -265,34 +266,45 @@ private:
             FillRect(item.hDC,&module,static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         }
     }
-    template<class Work> void Send(Work work) {
-        if(sending_.exchange(true)) { StatusText(L"当前发送尚未结束，请稍候"); return; }
-        if(!server_->IsConnected()) { sending_=false; StatusText(L"请先在 Android 端连接电脑"); return; }
+    bool Send(std::function<void()> work) {
+        if(!server_->IsConnected() || sending_.exchange(true)) return false;
         if(sender_.joinable()) sender_.join();
         for(int id:{SendText,SendClipboard,SendFile,SendFolder}) EnableWindow(Item(id),FALSE);
-        sender_=std::thread([this,work] {
+        sender_=std::thread([this,work=std::move(work)]() mutable {
             try { work(); } catch(const std::exception& e) { Queue({bridge::Event::Error,bridge::Wide(e.what())}); }
+            work={}; // Release temporary clipboard images before reporting completion.
             sending_=false; Queue({bridge::Event::Info,L""});
         });
+        return true;
     }
     void Files(const std::vector<std::filesystem::path>& paths) {
         if(paths.empty()) return;
-        Send([this,paths] { server_->SendFiles(paths); });
+        AcceptFiles(paths);
     }
     bool AcceptFiles(shelltransfer::Paths paths) {
-        size_t count = paths.size(); for(const auto& batch:pendingFiles_) count += batch.size();
-        if(count > 4096) { StatusText(L"待发送文件过多，请等待当前队列完成"); return false; }
-        pendingFiles_.push_back(std::move(paths));
+        if(paths.empty()) return false;
+        const auto count=paths.size();
+        return AcceptSend([this,paths=std::move(paths)] { server_->SendFiles(paths); },count);
+    }
+    bool AcceptSend(std::function<void()> work,size_t count=1) {
+        size_t total=count; for(const auto& item:pendingSends_) total+=item.count;
+        if(total > 4096) { StatusText(L"待发送内容过多，请等待当前队列完成"); return false; }
+        pendingSends_.push_back({std::move(work),count});
         if(!server_) return true;
         if(!server_->IsConnected()) {
-            StatusText(L"右键分享已排队 · 打开手机 LanBridge 自动连接；首次使用请扫码");
+            StatusText(L"已加入待发送队列 · 等待手机上线，连接后自动发送");
             ShowWindow(window_,SW_RESTORE); SetForegroundWindow(window_);
-        } else if(sending_) StatusText(L"右键分享已排队 · 当前传输完成后自动发送");
-        PumpFiles(); return true;
+        } else if(sending_) StatusText(L"已加入待发送队列 · 当前传输完成后自动发送");
+        PumpSends(); return true;
     }
-    void PumpFiles() {
-        if(sending_ || pendingFiles_.empty() || !server_ || !server_->IsConnected()) return;
-        auto paths = std::move(pendingFiles_.front()); pendingFiles_.pop_front(); Files(paths);
+    void PumpSends() {
+        if(sending_ || pendingSends_.empty() || !server_ || !server_->IsConnected()) return;
+        // Keep the queued snapshot if the connection disappears before dispatch.
+        if(Send(pendingSends_.front().work)) pendingSends_.pop_front();
+    }
+    void TextToSend(std::wstring text) {
+        if(text.empty()) { StatusText(L"没有可发送的文本"); return; }
+        AcceptSend([this,text=std::move(text)] { server_->SendText(text); });
     }
     void EnsureContextMenu() {
         if(menuStarted_) return;
@@ -400,7 +412,7 @@ private:
             }
         }
         for(int id:{SendText,SendClipboard,SendFile,SendFolder}) EnableWindow(Item(id),!sending_);
-        PumpFiles();
+        PumpSends();
     }
     void Command(int id) {
         switch(id) {
@@ -415,6 +427,7 @@ private:
             if(MessageBoxW(window_,L"重置后，已绑定手机需要重新扫码。是否继续？",L"重置配对",MB_YESNO|MB_ICONQUESTION)!=IDYES) break;
             try {
                 auto code=bridge::RandomCode(); pairing::Save(pairing::CredentialPath(),code);
+                pendingSends_.clear();
                 discovery_.Stop(); server_->Stop(); code_=std::move(code);
                 SetWindowTextW(Item(Code),bridge::Wide(code_).c_str()); UpdateQr();
                 server_->Start(42831,code_); discovery_.Start(code_); StatusText(L"已重置配对 · 请手机重新扫码绑定");
@@ -432,10 +445,16 @@ private:
             }
             break;
         }
-        case SendText: { auto text=Value(Text); Send([this,text] { server_->SendText(text); }); break; }
+        case SendText: TextToSend(Value(Text)); break;
         case SendClipboard: {
-            auto files=bridge::ReadFiles(window_);
-            if(!files.empty()) Files(files); else { auto text=bridge::ReadText(window_); Send([this,text] { server_->SendText(text); }); } break;
+            try {
+                auto files=bridge::ReadFiles(window_);
+                if(!files.empty()) Files(files);
+                else if(auto image=bridge::ReadImage(window_)) {
+                    AcceptSend([this,image] { server_->SendFiles({*image}); });
+                } else TextToSend(bridge::ReadText(window_));
+            } catch(const std::exception& e) { StatusText(bridge::Wide(e.what())); }
+            break;
         }
         case SendFile: SelectFiles(); break;
         case SendFolder: SelectFolder(); break;

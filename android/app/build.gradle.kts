@@ -1,12 +1,25 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.plugin.compose") }
+val releaseStore = providers.environmentVariable("LANBRIDGE_RELEASE_KEYSTORE").orNull
 android {
     namespace = "dev.lanbridge"
     compileSdk = 37
-    defaultConfig { applicationId = "dev.lanbridge"; minSdk = 31; targetSdk = 36; versionCode = 8; versionName = "1.4.0" }
+    defaultConfig { applicationId = "dev.lanbridge"; minSdk = 31; targetSdk = 36; versionCode = 12; versionName = "1.5.0" }
     defaultConfig { testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
-    buildTypes { release { isMinifyEnabled = false } }
+    signingConfigs {
+        if(releaseStore != null) create("release") {
+            storeFile = file(releaseStore)
+            storePassword = providers.environmentVariable("LANBRIDGE_RELEASE_PASSWORD").get()
+            keyAlias = "lanbridge"
+            keyPassword = storePassword
+        }
+    }
+    buildTypes { release {
+        isDebuggable = false
+        isMinifyEnabled = false
+        if(releaseStore != null) signingConfig = signingConfigs.getByName("release")
+    } }
 }
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.09.00"))

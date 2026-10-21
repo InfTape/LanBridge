@@ -1,9 +1,9 @@
 # LanBridge · Windows / Android 局域网互传
 
-桌面项目包含完整源码和可运行文件。Windows 当前版本 1.6.4，Android 版本 1.4.0。支持首次扫码绑定、后续自动重连、手机分享后自动发送，以及默认自动启用的 Windows 11 第一层右键菜单“发送到手机”。新增双向文件夹传输，保留目录层级、空目录和空文件；使用原有加密连接，无需压缩成 ZIP。保留 Android 16 网络绑定限制兼容及前台服务启动顺序修复。
+桌面项目包含完整源码和可运行文件。Windows 当前版本 1.6.5，Android 版本 1.5.0。支持首次扫码绑定、后续自动重连、手机分享后自动发送，以及默认自动启用的 Windows 11 第一层右键菜单“发送到手机”。新增双向文件夹传输，保留目录层级、空目录和空文件；使用原有加密连接，无需压缩成 ZIP。保留 Android 16 网络绑定限制兼容及前台服务启动顺序修复。
 
 - **Windows**：C++20，纯 Win32 API 窗口与标准控件，原生 DPI 缩放、托盘、文件对话框和拖放；网络使用 Winsock2，加密使用 BCrypt。界面参考 `native-screenshot-tool` 的中文原生控件设计。
-- **Android**：Kotlin + Jetpack Compose BOM 2026.09.00 + Material 3 Expressive 1.5.0-beta01，实际使用 `MaterialExpressiveTheme`、动态配色、Expressive 动效与加载组件，支持深色模式和宽屏双栏。Material 3 Expressive 当前使用 Beta API。
+- **Android**：Kotlin + Jetpack Compose BOM 2026.09.00 + Material 3 Expressive 1.5.0-beta01，实际使用 `MaterialExpressiveTheme`、固定中性配色、Expressive 动效与加载组件，支持深色模式和宽屏双栏。Material 3 Expressive 当前使用 Beta API。
 - **Android 16**：targetSdk 36；为满足新版 UI 库要求，compileSdk 37。最低支持 Android 12 / API 31。
 - 双向文本与多文件传输、加密配对、分块传输、SHA-256 校验、进度、接收回执、同名文件保留、接收历史和重新复制。
 - Windows 接收文本自动写入文本剪贴板；接收文件保存后自动写入文件剪贴板，资源管理器可直接 Ctrl+V。
@@ -11,8 +11,18 @@
 
 ## 使用
 
+Android 1.5.0 按参考图重新设计主界面：左对齐标题、设置与更多菜单、紧凑设备状态卡片、浅灰发送卡片、横排文件/文件夹按钮，以及图标、文件名和类型大小组成的接收记录。点击接收记录可打开文件或预览文字，右侧更多菜单保留分享和复制全文。顶部设置可访问连接配置与文件夹接收目录，更多菜单可断开或重连。白底、浅灰卡片和淡灰蓝按钮不再随壁纸改变；深色模式使用对应中性色。保留原生连接展开/收起动效及新记录三次高亮。普通文件仍保存至下载/LanBridge，文件夹使用单独授权目录，界面显示该目录名称。
+
+Android 1.4.3 将“连接电脑”收进上方连接状态条：连接成功后自动折叠，点击状态条可展开或收起，断开后自动展开。状态条带点击涟漪、旋转箭头和无障碍展开状态说明；面板使用 Jetpack Compose 自带的向下展开/向上收起与淡入淡出动画，收起后不留空白。传输进度或状态文本更新不会收起用户手动打开的面板。窄屏和宽屏使用相同交互，宽屏左侧可滚动访问完整连接设置。
+
+Android 1.4.2 为“最近收到”新增提示：接收完成的新卡片首次显示时，背景与边框使用当前主题色高亮、淡回三次，正常动画速度下约 1.8 秒，随后恢复普通卡片。文件、文件夹和文字均适用。接收记录使用独立标识作为列表 key，提示状态随记录保存，避免新记录插入、普通重组或滚动返回时旧卡片重新闪烁；动画使用 Compose 动画机制，遵循系统动画时长设置。
+
+Android 1.4.1 修复收到图片后分享给其他应用被当作普通文件的问题：分享时使用接收文件的具体 MIME 类型，例如 `image/png`、`image/jpeg`，不再统一声明为 `*/*`。文件提供方未返回具体类型时按扩展名识别，未知格式使用 `application/octet-stream`；分享同时携带文件 URI、ClipData 和临时读取权限。图片数据不重新编码，具体预览和发送形式仍由目标应用决定。
+
+1.6.5 修复 Windows 窗口发送入口在离线时没有保存任务的问题。发送剪贴板、文本、选择文件/文件夹和拖放共用待发送队列，手机建立加密连接后按顺序发送。剪贴板中的位图（包括截图）在点击时保存为临时 PNG，文字也在点击时保存，因此等待期间复制其他内容不会替换待发图片或文字；剪贴板文件列表仍引用原文件，请保持文件存在。临时 PNG 在任务完成、失败或正常退出时删除。队列仅在当前进程内保存，退出程序或重置配对会清空；已开始但中途失败的任务仍需重新发送，不提供断点续传。
+
 1. 在 Windows 双击项目根目录的 `LanBridge.exe`。
-2. 在 Android 安装 `LanBridge-Android16-debug.apk`。这是可安装的测试签名 APK，不是商店正式发布包。
+2. 在 Android 安装 `LanBridge-Android16-release.apk`（Release 构建、独立发布签名、不可调试），或继续使用 `LanBridge-Android16-debug.apk`（Debug 构建、调试签名）。两者包名相同但签名不同，不能互相覆盖或同时安装；已装 Debug 版时，切换 Release 需要先卸载，配对和设置需要重新配置。已保存到共享下载目录的文件不属于应用私有数据。两个 APK 均为本地构建，未上架应用商店。
 3. 手机和电脑接入同一局域网。Windows 默认选择真实 Wi-Fi / 以太网的 IPv4，优先有网关的网卡；VPN、VMware、Hyper-V 等虚拟网卡只供手动选择。没有可用的真实局域网网卡时，不会自动选择 VPN。如果电脑连接多个局域网，可在地址下拉框中选择与手机同网段的 IPv4。
 4. 手机点击 **扫码绑定 Windows**，首次使用允许相机权限，对准 Windows 窗口中的二维码；识别成功后自动返回并连接，验证握手成功后安全保存绑定。以后打开应用会自动寻找并连接同一台电脑，Windows 重启后无需再扫码，IP 改变时会通过局域网发现更新地址。也可展开“手动输入 / 粘贴连接信息”，填写电脑地址和 **16 位配对码**，或粘贴 Windows 复制的连接信息；端口默认为 42831。
 5. Android 中输入文本、选择文件，或在其他应用中“分享 → LanBridge”。从分享菜单进入后自动连接已绑定电脑，并发送文件或文本，不需要再次确认；首次使用尚未绑定时，扫码后自动发送。已有传输时，新的分享会排队等待。顶部大标语已移除，仅保留简洁的连接状态。
@@ -101,6 +111,14 @@ Android 使用 JDK 17+（本机验证使用 JDK 21）、Android SDK Platform 37.
 ```powershell
 .\build-android.ps1 -SdkPath '你的 Android SDK 路径' -Test
 ```
+
+另外生成签名 Release APK（保留原 Debug APK）：
+
+```powershell
+.\build-android.ps1 -Release -Test
+```
+
+Release 明确设置 `debuggable=false`，不包含仅用于 Debug 的 Compose UI tooling；目前沿用不启用 R8 混淆/压缩的配置。脚本运行 assembleRelease、lintRelease，`-Test` 运行项目现有的 Debug JVM 测试。首次 Release 构建在 `%LOCALAPPDATA%\LanBridge\AndroidSigning` 创建长期使用的 `release.p12` 发布密钥和当前 Windows 用户 DPAPI 加密的 `password.dpapi`，后续构建复用同一签名；密码通过临时环境变量传给构建进程，不写入源码或命令行参数。密钥不在项目或 APK 内，请妥善备份；密码文件只能由原 Windows 用户环境解密，跨机器迁移需另外安全迁移密码。直接运行 Gradle 而没有签名环境变量时只会生成未签名 Release，请使用上述脚本生成可安装包。签名与升级要求见 [Android 应用签名文档](https://developer.android.com/studio/publish/app-signing)。
 
 先构建两端后，可在 Windows 运行实际 Kotlin / BCrypt 互通测试：
 

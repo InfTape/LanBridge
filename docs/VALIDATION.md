@@ -1,5 +1,31 @@
 # 验证记录
 
+验证日期：2026-10-21。Android 1.5.0（versionCode 12）按用户参考图重做主界面：固定中性配色、紧凑设备卡片、文本输入区与粘贴图标、横排文件/文件夹发送按钮、保存位置卡片、带原生矢量图标和更多菜单的接收记录。新增设置底部面板与顶部更多菜单，保留断开/重连、扫码、手动连接、解除绑定、清空记录、文件打开/分享及文字预览/复制入口。沿用 Compose 连接面板动画与三次接收高亮；深色模式和宽屏双栏保留。授权目录名称在 IO 线程读取，普通文件与文件夹的实际保存路径策略未改变。
+
+Debug/Release 构建与 Lint 完成；现有 JVM 测试 34 项中 30 项通过、4 项外部 fixture 用例跳过，0 failures/errors。根目录 APK 更新为 1.5.0/12，分别复用原有 Debug/Release 签名，Release 无 application-debuggable 标志。ADB 未检测到设备，本机未安装模拟器，尚未进行新版布局、菜单点击和动画的设备视觉验证；构建与单元测试不代表这些交互已在手机上实测。
+
+验证日期：2026-10-21。Android 1.4.3（versionCode 11）将连接设置改为状态条下方的折叠面板：连接成功默认收起，连接断开默认展开，点击横条切换。展开状态保存在 BridgeScreen，按 connected 状态切换重置，普通状态消息及传输进度更新不重置；宽屏和窄屏共享此状态。使用 Compose AnimatedVisibility 的 expandVertically/shrinkVertically 与 fadeIn/fadeOut，展开方向从状态条向下、收起方向向上；间距包含在动画区域内，收起后不留空白。状态条使用 Material 可点击 Surface，带涟漪、原生数值动画旋转箭头及无障碍状态描述。宽屏左栏增加滚动以保留完整设置入口。
+
+Debug/Release 构建、两套 Lint 完成；JVM 测试 30 通过、4 外部 fixture 用例跳过，0 failures/errors。两个根目录 APK 更新为 1.4.3/11，分别保留原签名；Release 不可调试。ADB 未检测到设备，尚未进行实机点击、自动连接收起和断开展开的视觉验证。实现依据 [Compose 内置出现/消失动画](https://developer.android.com/develop/ui/compose/animation/composables-modifiers)，没有自定义动画计时循环。
+
+验证日期：2026-10-21。Android 1.4.2（versionCode 10）新增“最近收到”卡片三次高亮：每次 300 ms 亮起、300 ms 淡回，共三次，正常动画比例约 1.8 秒。背景、文字及边框颜色按当前主题插值，动画结束恢复默认；接收列表仅在完整接收后添加记录，因此未完成文件不会触发。每条 Received 分配独立 UUID，宽屏和窄屏列表均按 UUID 保持卡片身份；rememberSaveable 保存该记录已提示状态，避免普通重组、插入新记录或滚动返回时重复播放。动画开始后卡片离开组合会取消剩余动画，返回不会重新闪三次。
+
+Debug/Release APK 构建与两套 Lint 均完成；现有 JVM 测试 30 通过、4 外部 fixture 用例跳过，0 failures/errors。两套 APK 签名验证通过，分别复用各自上一版证书；aapt 确认版本为 1.4.2/10，Release 无 application-debuggable 标志。根目录两个 APK 均已更新，可分别覆盖同签名旧版。本次 ADB 无已连接设备，没有执行实机动画、滚动及屏幕旋转的视觉验证。动画和列表状态实现参考 [Compose 值动画](https://developer.android.com/develop/ui/compose/animation/value-based) 与 [Lazy 列表条目标识](https://developer.android.com/develop/ui/compose/lists#item-keys)。
+
+验证日期：2026-10-21。新增 Android 1.4.1 Release APK（versionCode 9），根目录文件名为 LanBridge-Android16-release.apk，原 Debug APK 保留且 SHA-256 未变化。build-android.ps1 增加 -Release，使用项目目录外的长期发布密钥，密码以当前用户 DPAPI 形式保存在本机；重复执行复用签名。
+
+`build-android.ps1 -Release -Test` 成功执行 assembleRelease、lintRelease，并复用未变更的 Debug JVM 测试结果（30 通过、4 外部 fixture 用例跳过）。apksigner 验证 APK v2 签名通过，证书为 CN=LanBridge Android Release，RSA 3072，证书 SHA-256 为 `37fec7695bf577640536964379e364dfc8ece1d6059165e579494649032b7305`，与 Debug 签名不同。aapt 检查实际 Release APK 中没有 application-debuggable、debuggable 或 testOnly 标记；包名 dev.lanbridge、版本 1.4.1/9、minSdk 31、targetSdk 36 正确。未开启 R8 混淆/压缩。未安装到手机，也未卸载现有应用；因为签名不同，Release 不能直接覆盖现有 Debug 版。
+
+验证日期：2026-10-21。Android 1.4.1（versionCode 9）修复接收图片的分享类型：从 ContentResolver 获取具体 MIME，缺少具体类型时按扩展名回退，未知内容使用 application/octet-stream；ACTION_SEND 的 EXTRA_STREAM 与 ClipData 指向同一文件，并授予临时读取权限。分享按钮调用此逻辑，图片不重新编码。实现遵循 [Android 分享二进制内容与 MIME 类型说明](https://developer.android.com/develop/ui/compose/sharing/send)。
+
+assembleDebug、lintDebug、testDebugUnitTest、assembleDebugAndroidTest 全部完成。JVM 测试 34 项中 30 项通过、4 项因未配置外部互通或二维码 fixture 跳过，0 failures、0 errors。新增 ReceivedFileShareTest 已编译，覆盖 PNG、JPEG、WebP、GIF、PDF、未知二进制文件的分享类型，以及文件 URI、ClipData、分享面板的读取权限传递；由于 ADB 未检测到设备，此设备测试未执行，也未验证其他 App 的实际展示。APK v2 签名验证通过，证书 SHA-256 与旧 APK 相同，根目录 LanBridge-Android16-debug.apk 已更新为 1.4.1，可覆盖安装。本次未改动手机中的应用或配对数据。
+
+验证日期：2026-10-21。Windows 1.6.5 修复剪贴板及窗口发送入口离线时没有保存待发送任务的问题，并新增剪贴板位图转 PNG。Android 和菜单身份包不变。Release 构建通过；FolderIntegration、ShellIntegration、BridgeIntegration、UiIntegration、QueuedClipboardIntegration 共 5 项相关集成测试通过，0 skipped。
+
+新增 QueuedClipboardIntegration 运行实际 Win32 程序，离线连续点击发送两张 CF_DIB 图片、剪贴板文字和编辑框文字，随后用本地加密客户端完成握手。验证自动按序发送、剪贴板覆盖后原图与原文字保持、PNG 字节及 SHA-256 一致、发送后临时 PNG 删除；再次断线排队第三张图片，重新连接后只发送一次。测试结束恢复原剪贴板。该用例对旧正式 EXE 在“offline clipboard is queued”断言失败，对修复后的 EXE 通过。图片读取直接使用并校验 DIB 数据，避免 CF_BITMAP 自动转换失败。此轮使用协议客户端验证，没有向真实手机发送测试图片。
+
+队列仍只保存在当前进程中；正常退出、重置配对会释放暂存图片，进程被强制结束时可能留下临时 PNG。传输已开始后发生错误不自动重试，原文件引用也不会复制为快照。上述 5 项为本次针对性回归，未重新运行其余启动注册及 Android 测试。
+
 验证日期：2026-10-13。Windows 1.6.4 修复局域网地址及二维码未随网络就绪更新，Android 保持 1.4.0，菜单身份包不变。Windows Release 构建及全部 12 项集成测试通过，0 skipped。
 
 旧版仅在 WM_CREATE 读取 LocalAddresses，之后没有地址变化通知或重新打开窗口时的刷新。实际生产连接的本地地址为 192.168.0.102、手机为 192.168.0.100，而窗口仍显示占位提示；传输服务监听所有接口，故可以传文件但扫码界面过期。新版使用 NotifyUnicastIpAddressChange 和 NotifyIpInterfaceChange，仅将通知投递到 UI 线程，250 ms 合并刷新；订阅后立即读取地址避免初始化间隙，打开窗口及 Connected 事件也刷新。通知订阅失败时使用 5 秒定时回读，退出取消通知及定时器；回调不等待 UI，不从回调取消自己。实现参考 [IPv4 地址通知](https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-notifyunicastipaddresschange) 和 [网卡变化通知](https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-notifyipinterfacechange)。

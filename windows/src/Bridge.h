@@ -25,6 +25,8 @@ bool CopyText(HWND owner, const std::wstring& text);
 bool CopyFiles(HWND owner, const std::vector<std::filesystem::path>& files);
 std::wstring ReadText(HWND owner);
 std::vector<std::filesystem::path> ReadFiles(HWND owner);
+// Snapshot a clipboard bitmap as PNG; the last owner removes the temporary file.
+std::shared_ptr<const std::filesystem::path> ReadImage(HWND owner);
 
 // Encrypted protocol shared with Android; independent read/write sequence counters.
 class Channel {

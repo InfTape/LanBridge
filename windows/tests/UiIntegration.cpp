@@ -12,18 +12,22 @@
 using namespace bridge;
 void Require(bool b,const char* m) { if(!b) throw std::runtime_error(m); }
 struct ClipboardUnavailable : std::runtime_error { using std::runtime_error::runtime_error; };
+bool OpenTestClipboard(HWND owner) {
+    for(int i=0;i<20;++i) { if(OpenClipboard(owner)) return true; Sleep(30); }
+    return false;
+}
 struct ClipboardBackup {
     HWND owner=CreateWindowExW(0,L"STATIC",L"test",0,0,0,0,0,HWND_MESSAGE,nullptr,nullptr,nullptr);
     std::vector<std::pair<UINT,HANDLE>> entries;
     ClipboardBackup() {
-        Require(OpenClipboard(owner)!=FALSE,"capture clipboard"); UINT f=0;
+        Require(OpenTestClipboard(owner),"capture clipboard"); UINT f=0;
         while((f=EnumClipboardFormats(f))) {
             auto h=GetClipboardData(f); auto copy=h?OleDuplicateData(h,static_cast<CLIPFORMAT>(f),0):nullptr;
             if(!copy) { CloseClipboard(); throw ClipboardUnavailable("Cannot preserve original clipboard; leaving it unchanged"); }
             entries.push_back({f,copy});
         } CloseClipboard();
     }
-    ~ClipboardBackup() { if(OpenClipboard(owner)) { EmptyClipboard(); for(auto [f,h]:entries) SetClipboardData(f,h); CloseClipboard(); } DestroyWindow(owner); }
+    ~ClipboardBackup() { if(OpenTestClipboard(owner)) { EmptyClipboard(); for(auto [f,h]:entries) SetClipboardData(f,h); CloseClipboard(); } DestroyWindow(owner); }
 };
 struct Process {
     PROCESS_INFORMATION pi{}; HWND window=nullptr;
@@ -66,10 +70,90 @@ int QrSnapshot(const wchar_t* executable,const wchar_t* snapshot) {
     std::cout<<"PASS: rendered Win32 QR fixtures for current and changed IPv4; clipboard untouched"<<std::endl;
     return 0;
 }
+void SetTestBitmap(HWND owner,DWORD color) {
+    constexpr size_t pixels=3*2;
+    auto memory=GlobalAlloc(GMEM_MOVEABLE|GMEM_ZEROINIT,sizeof(BITMAPINFOHEADER)+pixels*sizeof(DWORD));
+    Require(memory!=nullptr,"allocate bitmap fixture");
+    auto header=static_cast<BITMAPINFOHEADER*>(GlobalLock(memory));
+    Require(header!=nullptr,"lock bitmap fixture");
+    header->biSize=sizeof(*header); header->biWidth=3; header->biHeight=-2;
+    header->biPlanes=1; header->biBitCount=32; header->biCompression=BI_RGB;
+    auto data=reinterpret_cast<DWORD*>(header+1);
+    for(size_t i=0;i<pixels;++i) data[i]=color+static_cast<DWORD>(i);
+    GlobalUnlock(memory);
+    Require(OpenTestClipboard(owner),"open bitmap clipboard");
+    Require(EmptyClipboard() && SetClipboardData(CF_DIB,memory),"publish DIB fixture"); CloseClipboard();
+}
+Bytes FileBytes(const std::filesystem::path& file) {
+    std::ifstream stream(file,std::ios::binary);
+    Require(stream.good(),"open PNG snapshot"); return Bytes(std::istreambuf_iterator<char>(stream),{});
+}
+Bytes Digest(const Bytes& data) {
+    BCRYPT_ALG_HANDLE algorithm=nullptr; Bytes digest(32);
+    Require(BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0)==0,"hash provider");
+    auto status=BCryptHash(algorithm,nullptr,0,const_cast<PUCHAR>(data.data()),static_cast<ULONG>(data.size()),digest.data(),32);
+    BCryptCloseAlgorithmProvider(algorithm,0); Require(status==0,"hash PNG"); return digest;
+}
+std::unique_ptr<Channel> ConnectUi(HWND window) {
+    SOCKET socket=::socket(AF_INET,SOCK_STREAM,IPPROTO_TCP); sockaddr_in address{};
+    address.sin_family=AF_INET; address.sin_addr.s_addr=htonl(INADDR_LOOPBACK); address.sin_port=htons(42831);
+    Require(connect(socket,reinterpret_cast<sockaddr*>(&address),sizeof(address))==0,"queue client connect");
+    DWORD timeout=5000; setsockopt(socket,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<char*>(&timeout),sizeof(timeout));
+    Bytes greeting(20); int received=0;
+    while(received<20) { auto n=recv(socket,reinterpret_cast<char*>(greeting.data()+received),20-received,0); Require(n>0,"queue greeting"); received+=n; }
+    auto channel=std::make_unique<Channel>(socket,Utf8(GetControl(window,101)),Bytes(greeting.begin()+4,greeting.end()),false);
+    channel->Send(1,Bytes{'Q','u','e','u','e'}); Require(channel->Receive().first==1,"queue authenticated hello"); return channel;
+}
+void ReceivePng(Channel& channel,const Bytes& expected) {
+    auto [type,header]=channel.Receive(); Require(type==3 && header.size()>10,"queued PNG header");
+    size_t length=(static_cast<size_t>(header[0])<<8)|header[1]; Require(header.size()==length+10,"PNG header length");
+    auto name=Wide(std::string(header.begin()+2,header.begin()+2+length)); Require(name.ends_with(L".png"),"PNG name");
+    uint64_t size=0; for(size_t i=2+length;i<header.size();++i) size=(size<<8)|header[i];
+    Require(size==expected.size(),"snapshot byte count"); Bytes actual;
+    while(actual.size()<size) { auto part=channel.Receive(); Require(part.first==4,"PNG chunk"); actual.insert(actual.end(),part.second.begin(),part.second.end()); }
+    Require(actual==expected,"queued image preserves original pixels after clipboard changes");
+    auto digest=channel.Receive(); Require(digest.first==5 && digest.second==Digest(actual),"PNG SHA256");
+    auto temporary=std::filesystem::temp_directory_path()/name;
+    for(int i=0;i<100 && std::filesystem::exists(temporary);++i) Sleep(10);
+    Require(!std::filesystem::exists(temporary),"sent image temporary file cleaned");
+}
+int QueuedClipboard(const wchar_t* executable) {
+    Require(!FindWindowW(L"LanBridgeWindow",nullptr),"app already running"); ClipboardBackup backup; Process process;
+    auto command=L"\""+std::wstring(executable)+L"\" --startup"; STARTUPINFOW info{sizeof(info)};
+    Require(CreateProcessW(nullptr,command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&info,&process.pi)!=FALSE,"launch queue test");
+    WaitForInputIdle(process.pi.hProcess,10000);
+    for(int i=0;i<100 && !process.window;++i) { process.window=FindWindowW(L"LanBridgeWindow",nullptr); if(!process.window) Sleep(20); }
+    Require(process.window!=nullptr,"queue window");
+    auto queueImage=[&](DWORD color) {
+        SetTestBitmap(backup.owner,color); auto snapshot=ReadImage(backup.owner); Require(snapshot!=nullptr,"DIB converts to PNG");
+        auto bytes=FileBytes(*snapshot);
+        SendMessageW(process.window,WM_COMMAND,106,0);
+        Require(GetControl(process.window,113).find(L"待发送队列")!=std::wstring::npos,"offline clipboard is queued");
+        return bytes;
+    };
+    const auto first=queueImage(0x00112233),second=queueImage(0x00aabb00);
+    Require(CopyText(backup.owner,L"queued clipboard text"),"set queued text"); SendMessageW(process.window,WM_COMMAND,106,0);
+    Require(CopyText(backup.owner,L"replacement must not be sent"),"replace queued clipboard");
+    SendMessageW(GetDlgItem(process.window,104),WM_SETTEXT,0,reinterpret_cast<LPARAM>(L"queued editor text"));
+    SendMessageW(process.window,WM_COMMAND,105,0);
+    auto channel=ConnectUi(process.window); ReceivePng(*channel,first); ReceivePng(*channel,second);
+    for(const auto& expected:{"queued clipboard text","queued editor text"}) {
+        auto result=channel->Receive(); Require(result.first==2 && std::string(result.second.begin(),result.second.end())==expected,"queued text order and snapshot");
+    }
+    channel->Send(7); Require(channel->Receive().first==8,"queue sent exactly once"); channel->Close();
+    for(int i=0;i<100 && GetControl(process.window,113).find(L"连接已断开")==std::wstring::npos;++i) Sleep(20);
+    Require(GetControl(process.window,113).find(L"连接已断开")!=std::wstring::npos,"disconnected before second queue");
+    auto third=queueImage(0x00334455); Require(CopyText(backup.owner,L"changed again"),"change clipboard before reconnect");
+    channel=ConnectUi(process.window); ReceivePng(*channel,third);
+    channel->Send(7); Require(channel->Receive().first==8,"reconnect sends exactly once"); channel->Close();
+    std::cout<<"PASS: offline DIB images and text queued in order, clipboard snapshots survive replacement, authenticated reconnect drains once, PNG bytes/SHA256 and temporary cleanup verified; original clipboard restored"<<std::endl;
+    return 0;
+}
 int wmain(int argc,wchar_t** argv) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED); WSADATA ws; WSAStartup(MAKEWORD(2,2),&ws);
     try {
+        if(argc==3 && wcscmp(argv[1],L"--queued-clipboard")==0) { auto result=QueuedClipboard(argv[2]); WSACleanup(); CoUninitialize(); return result; }
         if(argc==3 && wcscmp(argv[1],L"--addresses")==0) {
             Require(!FindWindowW(L"LanBridgeWindow",nullptr),"app already running"); Process p;
             std::wstring command=L"\""+std::wstring(argv[2])+L"\" --startup";

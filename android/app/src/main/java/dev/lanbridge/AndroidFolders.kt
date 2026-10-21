@@ -27,6 +27,7 @@ internal class AndroidFolders(private val context: Context) {
         }
     }
     fun destination(): Uri? = prefs.getString("destination",null)?.let(Uri::parse)?.takeIf { uri -> resolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission } }
+    fun destinationName(): String? = destination()?.let { uri -> runCatching { document(documentUri(uri)).name }.getOrNull() }
     fun setDestination(uri: Uri) {
         resolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         require(document(documentUri(uri)).directory)

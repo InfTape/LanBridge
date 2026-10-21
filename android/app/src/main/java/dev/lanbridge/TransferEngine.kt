@@ -23,9 +23,10 @@ import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicLong
+import java.util.UUID
 
 class BridgeApplication : Application() { val engine by lazy { TransferEngine(this) } }
-data class Received(val name: String, val text: String? = null, val uri: Uri? = null, val size: Long = 0, val directory: Boolean = false)
+data class Received(val name: String, val text: String? = null, val uri: Uri? = null, val size: Long = 0, val directory: Boolean = false, val id: String = UUID.randomUUID().toString())
 data class TransferState(
     val connected: Boolean = false, val connecting: Boolean = false, val remembered: Boolean = false,
     val sending: Boolean = false, val pendingShares: Int = 0, val status: String = "准备连接电脑",
@@ -356,6 +357,7 @@ class TransferEngine(private val app: Application) {
     fun sendFiles(uris: List<Uri>) { sendTask { channel -> sendFilesData(channel, uris) } }
     fun sendFolder(uri: Uri) { sendTask { channel -> sendFolderData(channel,uri) } }
     fun folderDestination(): Boolean = folders.destination() != null
+    fun folderDestinationName(): String? = folders.destinationName()
     fun setFolderDestination(uri: Uri) {
         try { folders.setDestination(uri); report("文件夹接收位置已保存，下次无需再次授权") }
         catch(e: Exception) { report("无法保存接收位置：${e.message}") }
