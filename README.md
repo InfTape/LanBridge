@@ -1,6 +1,6 @@
 # LanBridge · Windows / Android 局域网互传
 
-桌面项目包含完整源码和可运行文件。Windows 当前版本 1.6.5，Android 版本 1.10.1。支持首次扫码绑定、后续自动重连、手机分享后自动发送，以及默认自动启用的 Windows 11 第一层右键菜单“发送到手机”。新增双向文件夹传输，保留目录层级、空目录和空文件；使用原有加密连接，无需压缩成 ZIP。保留 Android 16 网络绑定限制兼容及前台服务启动顺序修复。
+桌面项目包含完整源码和可运行文件。Windows 当前版本 1.6.5，Android 版本 1.10.2。支持首次扫码绑定、后续自动重连、手机分享后自动发送，以及默认自动启用的 Windows 11 第一层右键菜单“发送到手机”。新增双向文件夹传输，保留目录层级、空目录和空文件；使用原有加密连接，无需压缩成 ZIP。保留 Android 16 网络绑定限制兼容及前台服务启动顺序修复。
 
 - **Windows**：C++20，纯 Win32 API 窗口与标准控件，原生 DPI 缩放、托盘、文件对话框和拖放；网络使用 Winsock2，加密使用 BCrypt。界面参考 `native-screenshot-tool` 的中文原生控件设计。
 - **Android**：Kotlin + Jetpack Compose BOM 2026.09.00 + Material 3 Expressive 1.5.0-beta01，实际使用 `MaterialExpressiveTheme`、固定中性配色、Expressive 动效与加载组件，支持深色模式和宽屏双栏。Material 3 Expressive 当前使用 Beta API。
@@ -10,6 +10,8 @@
 - Windows 显示配对二维码，Android 使用 CameraX 1.6.2 + ZXing 3.5.4 在设备上离线识别，扫描成功后自动连接；无需 Google Play 服务或下载扫码模型。
 
 ## 使用
+
+Android 1.10.2 首页设备条下方改为圆点分页指示器，当前页使用主题主色高亮，其余圆点淡显，包含末尾添加电脑页；辅助功能仍可读出当前页与总页数。
 
 Android 1.10.1 最近收到为空时居中展示 Read You 的人物与树木 SVG 插画，并将“最近 24 小时没有收到文件或文本”放在插画下方居中。保留原 SVG 的 49 条路径及透明度，以 Compose 原生矢量渲染，按当前深浅主题着色，无额外 SVG 运行库或网络加载；仅在记录加载成功且无内容时出现。来源、修改说明和原许可附在 THIRD_PARTY_NOTICES.md 与 APK assets/licenses/ReadYou 中。
 

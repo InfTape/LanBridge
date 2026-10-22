@@ -1,8 +1,10 @@
 package dev.lanbridge
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -95,9 +97,19 @@ import kotlinx.coroutines.launch
                     }
                 }
             }
-            if(computers.isNotEmpty()) Text("${page + 1} / $pageCount", fontSize = 11.sp, lineHeight = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().wrapContentWidth().semantics { contentDescription = "第 ${page + 1} 页，共 $pageCount 页；左右滑动浏览电脑，点击连接按钮才连接" })
+            if(computers.isNotEmpty()) Row(
+                modifier = Modifier.fillMaxWidth().height(14.dp).semantics {
+                    contentDescription = "第 ${page + 1} 页，共 $pageCount 页；左右滑动浏览电脑，点击连接按钮才连接"
+                },
+                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                repeat(pageCount) { index ->
+                    Box(Modifier.size(6.dp).background(
+                        if(index == page) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f), CircleShape))
+                }
+            }
         }
     }
 }

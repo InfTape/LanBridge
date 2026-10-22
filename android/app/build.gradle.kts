@@ -3,7 +3,7 @@ val releaseStore = providers.environmentVariable("LANBRIDGE_RELEASE_KEYSTORE").o
 android {
     namespace = "dev.lanbridge"
     compileSdk = 37
-    defaultConfig { applicationId = "dev.lanbridge"; minSdk = 31; targetSdk = 36; versionCode = 40; versionName = "1.10.1" }
+    defaultConfig { applicationId = "dev.lanbridge"; minSdk = 31; targetSdk = 36; versionCode = 41; versionName = "1.10.2" }
     defaultConfig { testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
