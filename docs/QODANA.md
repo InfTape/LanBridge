@@ -15,7 +15,7 @@ Both workflows perform full analysis with the recommended profile. They do not a
 
 Project tokens are managed by the Qodana Cloud GitHub App and stored only in GitHub Actions Secrets. YAML contains secret names, never token values. If a project token is rotated, update its matching repository secret through the Qodana/GitHub settings.
 
-The Windows job generates `windows/build/qodana/LanBridge.sln` with Visual Studio 2022 x64 and builds Release before analysis. The solution and binaries remain ignored build outputs. Generated files under `windows/build` and vendored files under `windows/third_party` are excluded from issue analysis. Windows SDK and MSVC are provided by the Windows runner; this job does not attempt to build Win32 code inside a Linux container.
+The Windows job generates `windows/build/qodana/LanBridge.sln` with Visual Studio 2022 x64 and builds Release before analysis. It writes an ignored `windows/LanBridge.qodana.sln` wrapper with project references pointing back into the build directory. Placing this analysis entry at the source root lets Qodana report paths relative to `windows/`, rather than emit paths such as `../../src/Main.cpp` relative to the build directory. The original generated solution and normal application builds are unchanged. Generated files under `windows/build` and vendored files under `windows/third_party` are excluded from issue analysis. Windows SDK and MSVC are provided by the Windows runner; this job does not attempt to build Win32 code inside a Linux container.
 
 The Android scan uses the existing Gradle wrapper and AGP versions; no app dependency, SDK target, or signing configuration is downgraded for Qodana. Release signing keys are not available to these jobs.
 

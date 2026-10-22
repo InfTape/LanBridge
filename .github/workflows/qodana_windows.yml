@@ -32,6 +32,12 @@ jobs:
         run: cmake -S windows -B windows/build/qodana -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=OFF
       - name: Build Windows application
         run: cmake --build windows/build/qodana --config Release --parallel 2
+      - name: Place analysis solution at the source root
+        shell: pwsh
+        run: |
+          $solution = Get-Content -LiteralPath windows/build/qodana/LanBridge.sln -Raw
+          $solution = [regex]::Replace($solution, '(?m)^(Project\("[^"]+"\) = "[^"]+", ")([^"]+\.vcxproj)(")', '${1}build\qodana\${2}${3}')
+          Set-Content -LiteralPath windows/LanBridge.qodana.sln -Value $solution -Encoding utf8
       - name: Qodana Scan
         uses: JetBrains/qodana-action@3e8d76ff0e0241618abd808682f426afe84bab3f # v2026.2.2
         with:
@@ -39,7 +45,7 @@ jobs:
             --project-dir windows
             --linter qodana-dotnet
             --within-docker false
-            --property=qodana.net.solution=build/qodana/LanBridge.sln
+            --property=qodana.net.solution=LanBridge.qodana.sln
             --property=qodana.net.platform=x64
             --property=qodana.net.configuration=Release
           pr-mode: false
