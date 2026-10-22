@@ -1,0 +1,8 @@
+# This file is included in public scan reports. Keep credentials in GitHub Secrets.
+version: "1.0"
+linter: jetbrains/qodana-android:2026.2
+projectJDK: "21"
+profile:
+  name: qodana.recommended
+include:
+  - name: CheckDependencyLicenses
