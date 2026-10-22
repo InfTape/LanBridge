@@ -1,4 +1,5 @@
 windows/build/
+windows/LanBridge.qodana.sln
 android/.gradle/
 android/.kotlin/
 android/**/build/

@@ -1,0 +1,12 @@
+# Keep the Windows SDK/MSVC analysis on a Windows runner.
+version: "1.0"
+linter: qodana-dotnet
+profile:
+  name: qodana.recommended
+include:
+  - name: CheckDependencyLicenses
+exclude:
+  - name: All
+    paths:
+      - build
+      - third_party
