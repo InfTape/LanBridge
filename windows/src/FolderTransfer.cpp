@@ -127,7 +127,7 @@ Plan Collect(const std::filesystem::path& selected) {
         if(directory) ++plan.directories; else { ++plan.files; plan.bytes+=size; }
     }
     // Parents precede their children, regardless of filesystem enumeration order.
-    std::sort(plan.entries.begin(),plan.entries.end(),[](const Entry& a,const Entry& b) { auto ad=std::count(a.relative.begin(),a.relative.end(),'/'), bd=std::count(b.relative.begin(),b.relative.end(),'/'); if(ad!=bd) return ad<bd; if(a.directory!=b.directory) return a.directory; return a.relative<b.relative; });
+    std::sort(plan.entries.begin(),plan.entries.end(),[](const Entry& a,const Entry& b) { const auto ad=std::count(a.relative.begin(),a.relative.end(),'/'), bd=std::count(b.relative.begin(),b.relative.end(),'/'); if(ad!=bd) return ad<bd; if(a.directory!=b.directory) return a.directory; return a.relative<b.relative; });
     return plan;
 }
 Bytes EncodeHeader(const Header& h) { const auto name=RelativePath(h.name); Require(!name.has_parent_path() && h.id!=0 && uint64_t(h.files)+h.directories<=MaxEntries && h.bytes<=MaxTotal && (h.files>0 || h.bytes==0),"Invalid folder header"); Bytes b; Put(b,h.id,8); Put(b,h.name.size(),2); b.insert(b.end(),h.name.begin(),h.name.end()); Put(b,h.files,4); Put(b,h.directories,4); Put(b,h.bytes,8); return b; }

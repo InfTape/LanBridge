@@ -98,7 +98,7 @@ bool RegisteredAt(const std::wstring& fullName,const std::filesystem::path& root
     if(!fullName.starts_with(L"LanBridge.ContextMenu_")) return false;
     UINT32 length=0; if(PackageFamilyNameFromFullName(fullName.c_str(),&length,nullptr)!=ERROR_INSUFFICIENT_BUFFER || length>256) return false;
     std::vector<wchar_t> family(length); if(PackageFamilyNameFromFullName(fullName.c_str(),&length,family.data())!=ERROR_SUCCESS) return false;
-    UINT32 count=0,characters=0; auto result=GetPackagesByPackageFamily(family.data(),&count,nullptr,&characters,nullptr);
+    UINT32 count=0,characters=0; const auto result=GetPackagesByPackageFamily(family.data(),&count,nullptr,&characters,nullptr);
     if(result!=ERROR_INSUFFICIENT_BUFFER || count!=1 || characters>4096) return false;
     PWSTR name=nullptr; std::vector<wchar_t> names(characters);
     if(GetPackagesByPackageFamily(family.data(),&count,&name,&characters,names.data())!=ERROR_SUCCESS || count!=1 || !name || fullName!=name) return false;
@@ -117,7 +117,7 @@ bool IsCurrent(const std::filesystem::path& root,const std::wstring& receiptKey)
         DWORD version=0,size=sizeof(version);
         if(RegGetValueW(key.value,nullptr,L"Schema",RRF_RT_REG_DWORD,nullptr,&version,&size)!=ERROR_SUCCESS || version!=1) return false;
         if(!SamePath(Read(key.value,L"Location"),root)) return false;
-        auto fullName=Read(key.value,L"PackageFullName");
+        const auto fullName=Read(key.value,L"PackageFullName");
         if(!RegisteredAt(fullName,root)) return false;
         if(!std::filesystem::is_regular_file(root/L"LanBridge.exe") || !std::filesystem::is_regular_file(root/L"LanBridgeShell.dll")) return false;
         if(PackageHash(root/L"context-menu"/L"LanBridge.ContextMenu.msix")!=Read(key.value,L"PackageHash")) return false;

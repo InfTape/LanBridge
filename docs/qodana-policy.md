@@ -34,8 +34,8 @@ file/folder transfer and shell-selection regressions.
 
 ## P3: source changes
 
-155 local declarations were made const; multi-declarator statements cover
-additional reported variables. Handle pointers remain usable for their intended
+Immutable local declarations were made const, including multi-declarator
+statements and the read-only WM_COPYDATA view. Handle pointers remain usable for their intended
 operations: const qualifies the local value, not the pointed-to resource.
 Resource-owning wrappers explicitly prohibit copying/moving. Some were already
 implicitly non-copyable; this is a preventive ownership contract, not evidence

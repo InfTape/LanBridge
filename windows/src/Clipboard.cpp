@@ -34,7 +34,7 @@ bool CopyFiles(HWND owner, const std::vector<std::filesystem::path>& files) {
     std::wstring names;
     for(const auto& file:files) {
         std::error_code error;
-        auto status=std::filesystem::status(file,error);
+        const auto status=std::filesystem::status(file,error);
         if(error || (!std::filesystem::is_regular_file(status) && !std::filesystem::is_directory(status))) return false;
         names += std::filesystem::absolute(file).wstring(); names += L'\0';
     }
@@ -50,7 +50,7 @@ bool CopyFiles(HWND owner, const std::vector<std::filesystem::path>& files) {
     if(!EmptyClipboard() || !SetClipboardData(CF_HDROP,memory)) { CloseClipboard(); GlobalFree(memory); return false; }
     // Explorer and other drop targets should copy instead of moving the received file.
     {
-        HGLOBAL effect=GlobalAlloc(GMEM_MOVEABLE,sizeof(DWORD));
+        const HGLOBAL effect=GlobalAlloc(GMEM_MOVEABLE,sizeof(DWORD));
         if(effect) {
             if(const auto v=static_cast<DWORD*>(GlobalLock(effect))) {
                 *v=DROPEFFECT_COPY; GlobalUnlock(effect);
@@ -79,7 +79,7 @@ std::vector<std::filesystem::path> ReadFiles(HWND owner) {
             for(UINT i=0;i<n;i++) {
                 std::wstring p(DragQueryFileW(h,i,nullptr,0)+1,L'\0');
                 DragQueryFileW(h,i,p.data(),static_cast<UINT>(p.size())); p.pop_back();
-                std::error_code error; auto status=std::filesystem::status(p,error);
+                std::error_code error; const auto status=std::filesystem::status(p,error);
                 if(!error && (std::filesystem::is_regular_file(status) || std::filesystem::is_directory(status))) result.emplace_back(p);
             }
         }

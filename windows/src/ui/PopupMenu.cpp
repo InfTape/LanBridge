@@ -23,7 +23,7 @@ bool PopupMenu::Prepare(HWND owner,const POINT& anchor) {
         }
     }
     SetWindowPos(tooltip_,HWND_TOPMOST,anchor.x,anchor.y,0,0,SWP_NOSIZE|SWP_NOACTIVATE);
-    UINT dpi=UiDpi(tooltip_);
+    const UINT dpi=UiDpi(tooltip_);
     if(!font_ || dpi!=dpi_) {
         // native-screenshot-tool uses 9 pt (12 logical pixels), not the body UI size.
         const HFONT replacement=CreateUiFont(dpi); if(!replacement) return false;
@@ -85,9 +85,9 @@ void PopupMenu::ShowTooltip(HWND owner,const POINT& anchor) {
     SendMessageW(tooltip_,TTM_SETMARGIN,0,reinterpret_cast<LPARAM>(&margin));
     const HDC dc=GetDC(tooltip_); const auto old=SelectObject(dc,font_); SIZE size{}; constexpr wchar_t tip[]=L"LanBridge · 局域网互传";
     GetTextExtentPoint32W(dc,tip,static_cast<int>(std::size(tip)-1),&size); SelectObject(dc,old); ReleaseDC(tooltip_,dc);
-    int width=size.cx+2*padding+ScaleForDpi(6,dpi_,96),height=size.cy+padding+ScaleForDpi(6,dpi_,96);
+    const int width=size.cx+2*padding+ScaleForDpi(6,dpi_,96),height=size.cy+padding+ScaleForDpi(6,dpi_,96);
     MONITORINFO monitor{}; monitor.cbSize=sizeof(monitor); GetMonitorInfoW(MonitorFromPoint(anchor,MONITOR_DEFAULTTONEAREST),&monitor);
-    int x=std::clamp(static_cast<int>(iconRect.left),static_cast<int>(monitor.rcWork.left),std::max(static_cast<int>(monitor.rcWork.left),static_cast<int>(monitor.rcWork.right)-width));
+    const int x=std::clamp(static_cast<int>(iconRect.left),static_cast<int>(monitor.rcWork.left),std::max(static_cast<int>(monitor.rcWork.left),static_cast<int>(monitor.rcWork.right)-width));
     int y=iconRect.top-height-ScaleForDpi(4,dpi_,96); if(y<monitor.rcWork.top) y=iconRect.bottom+ScaleForDpi(4,dpi_,96);
     y=std::clamp(y,static_cast<int>(monitor.rcWork.top),std::max(static_cast<int>(monitor.rcWork.top),static_cast<int>(monitor.rcWork.bottom)-height));
     TOOLINFOW tool{}; tool.cbSize=sizeof(tool); tool.hwnd=owner; tool.uId=1;

@@ -100,7 +100,7 @@ public:
         if(!startupLaunch) EnsureContextMenu();
         if(!initial.empty()) AcceptFiles(initial);
         MSG m{};
-        BOOL message=0;
+        BOOL message;
         while((message=GetMessageW(&m,nullptr,0,0))>0) { if(!IsDialogMessageW(window_,&m)) { TranslateMessage(&m); DispatchMessageW(&m); } }
         return message==-1 ? 1 : static_cast<int>(m.wParam);
     }
@@ -162,7 +162,7 @@ private:
         Control(PROGRESS_CLASSW,L"",Progress,PBS_SMOOTH);
         Control(L"STATIC",L"启动中…",Status);
         UpdateQr(); FontSetup(); Layout();
-        const BOOL dark=FALSE;
+        constexpr BOOL dark=FALSE;
         // Cosmetic only: older Windows versions keep the default title bar.
         const auto appearance=DwmSetWindowAttribute(window_,20,&dark,sizeof(dark));
         if(FAILED(appearance)) OutputDebugStringW(L"LanBridge: default title bar appearance retained\n");
@@ -228,7 +228,7 @@ private:
         const bool automatic=!addresses.empty() && addresses.front().autoSelect;
         if(!automatic) items.emplace_back(L"请选择局域网 IPv4 地址");
         for(const auto& address:addresses) items.push_back(address.address);
-        auto pinned=std::find_if(addresses.begin(),addresses.end(),[&](const auto& address){return address.address==previous;});
+        const auto pinned=std::find_if(addresses.begin(),addresses.end(),[&](const auto& address){return address.address==previous;});
         if(manualAddress_ && pinned==addresses.end()) manualAddress_=false;
         const auto selected=manualAddress_?previous:items.front();
         const auto combo=Item(Ip);
@@ -254,7 +254,7 @@ private:
     std::wstring ConnectionUri() { return L"lanbridge://"+Value(Ip)+L":42831/"+bridge::Wide(code_); }
     void UpdateQr() {
         try {
-            auto address=Value(Ip);
+            const auto address=Value(Ip);
             if(address.empty() || address.find(L"地址")!=std::wstring::npos) { qr_.reset(); }
             else qr_=qrcodegen::QrCode::encodeText(bridge::Utf8(ConnectionUri()).c_str(),qrcodegen::QrCode::Ecc::MEDIUM);
         } catch(...) { qr_.reset(); }
@@ -463,7 +463,7 @@ private:
         case SendText: TextToSend(Value(Text)); break;
         case SendClipboard: {
             try {
-                auto files=bridge::ReadFiles(window_);
+                const auto files=bridge::ReadFiles(window_);
                 if(!files.empty()) Files(files);
                 else if(auto image=bridge::ReadImage(window_)) {
                     AcceptSend([this,image] { server_->SendFiles({*image}); });
@@ -476,7 +476,7 @@ private:
         case OpenFolder: ShellExecuteW(window_,L"open",folder_.c_str(),nullptr,nullptr,SW_SHOWNORMAL); break;
         case Clear: records_.clear(); SendMessageW(Item(History),LB_RESETCONTENT,0,0); break;
         case Recopy: {
-            int i=static_cast<int>(SendMessageW(Item(History),LB_GETCURSEL,0,0));
+            const int i=static_cast<int>(SendMessageW(Item(History),LB_GETCURSEL,0,0));
             if(i>=0 && static_cast<size_t>(i)<records_.size()) {
                 const auto& r=records_[i]; const bool ok=r.file?bridge::CopyFiles(window_,{r.path}):bridge::CopyText(window_,r.text);
                 StatusText(ok?L"已重新复制到剪贴板":L"复制失败，请重试");
@@ -536,7 +536,7 @@ private:
             if(w==AddressesFallbackTimer) { app->RefreshAddresses(); return 0; }
             break;
         case WM_COPYDATA: {
-            auto* const data=reinterpret_cast<COPYDATASTRUCT*>(l);
+            const auto* const data=reinterpret_cast<const COPYDATASTRUCT*>(l);
             if(!data || data->dwData != shelltransfer::MessageId) return FALSE;
             try { return app->AcceptFiles(shelltransfer::Decode(data->lpData,data->cbData))?TRUE:FALSE; }
             catch(...) { return FALSE; }

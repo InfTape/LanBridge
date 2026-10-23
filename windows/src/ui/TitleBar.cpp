@@ -43,7 +43,7 @@ bool TitleBar::Create(HWND parent, HINSTANCE instance) {
 
 void TitleBar::SetFont(HFONT font) {
     font_ = font;
-    for (HWND button : buttons_) SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    for (const HWND button : buttons_) SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 }
 
 void TitleBar::Layout(int client_width) {

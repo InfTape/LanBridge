@@ -19,6 +19,10 @@ class Command final : public IExplorerCommand {
     std::atomic<ULONG> references_{1};
 public:
     Command() { ++objects; }
+    Command(const Command&)=delete;
+    Command& operator=(const Command&)=delete;
+    Command(Command&&)=delete;
+    Command& operator=(Command&&)=delete;
     ~Command() { --objects; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** value) override {
         if(!value) return E_POINTER; *value = nullptr;
@@ -82,6 +86,10 @@ class Factory final : public IClassFactory {
     std::atomic<ULONG> references_{1};
 public:
     Factory() { ++objects; }
+    Factory(const Factory&)=delete;
+    Factory& operator=(const Factory&)=delete;
+    Factory(Factory&&)=delete;
+    Factory& operator=(Factory&&)=delete;
     ~Factory() { --objects; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** value) override {
         if(!value) return E_POINTER; *value = nullptr;

@@ -163,7 +163,7 @@ std::pair<unsigned char,Bytes> Channel::Receive() {
     BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO info; BCRYPT_INIT_AUTH_MODE_INFO(info)
     info.pbNonce=packet.data(); info.cbNonce=12; info.pbTag=packet.data()+n-16; info.cbTag=16; info.pbAuthData=aad.data(); info.cbAuthData=static_cast<ULONG>(aad.size());
     ULONG written=0;
-    auto status=BCryptDecrypt(static_cast<BCRYPT_KEY_HANDLE>(key_),packet.data()+12,n-28,&info,nullptr,0,plain.data(),static_cast<ULONG>(plain.size()),&written,0);
+    const auto status=BCryptDecrypt(static_cast<BCRYPT_KEY_HANDLE>(key_),packet.data()+12,n-28,&info,nullptr,0,plain.data(),static_cast<ULONG>(plain.size()),&written,0);
     if(status<0) throw std::runtime_error("Pairing code mismatch or damaged encrypted frame");
     ++rx_; auto type=plain[0]; plain.erase(plain.begin()); return {type,std::move(plain)};
 }
@@ -218,7 +218,7 @@ void Server::Run(uint16_t port,std::string code) {
         if(c) c->Close(); else { pending_=INVALID_SOCKET; closesocket(s); }
         if(!stopping_) { Emit({Event::Disconnected,L"连接已断开 · 等待重连"+(disconnectReason.empty()?L"":L" · "+disconnectReason)}); for(int i=0;i<10 && !stopping_;i++) Sleep(100); }
     }
-    auto s=listener_.exchange(INVALID_SOCKET); if(s!=INVALID_SOCKET) closesocket(s);
+    const auto s=listener_.exchange(INVALID_SOCKET); if(s!=INVALID_SOCKET) closesocket(s);
 }
 void Server::Session(const std::shared_ptr<Channel>& c) {
     std::unique_ptr<Incoming> incoming;
@@ -317,7 +317,7 @@ void Server::SendFiles(const std::vector<std::filesystem::path>& files) {
             try {
                 auto last=std::chrono::steady_clock::now();
                 folders::Send(*c,plan,[&](uint64_t done,uint64_t total) {
-                    auto now=std::chrono::steady_clock::now(); if(done==0 || now-last>std::chrono::milliseconds(150)) { Emit({Event::Progress,L"发送文件夹 "+Wide(plan.name),{},done,total}); last=now; }
+                    const auto now=std::chrono::steady_clock::now(); if(done==0 || now-last>std::chrono::milliseconds(150)) { Emit({Event::Progress,L"发送文件夹 "+Wide(plan.name),{},done,total}); last=now; }
                 });
             } catch(...) {
                 auto error=std::current_exception(); Bytes cancel=folders::Reply(id,false); cancel.resize(8);
