@@ -33,10 +33,30 @@ internal data class ComputerBindings(val computers: List<SavedComputer> = emptyL
 
     /** Authentication calls this only after the encrypted hello succeeds. */
     fun remember(pair: Pairing): ComputerBindings {
-        val previous = computers.find { it.pairing.code == pair.code }
+        val byCode = computers.find { it.pairing.code == pair.code }
+        val byCurrentEndpoint = if(byCode == null) {
+            current?.takeIf { it.pairing.host == pair.host && it.pairing.port == pair.port }
+        } else null
+        val byUniqueEndpoint = if(byCode == null && byCurrentEndpoint == null) {
+            computers.find { it.pairing.host == pair.host && it.pairing.port == pair.port }
+        } else null
+
+        val previous = byCode ?: byCurrentEndpoint ?: byUniqueEndpoint
         val computer = previous?.copy(pairing = pair) ?: SavedComputer(UUID.randomUUID().toString(), pair)
-        val updated = if(previous == null) computers + computer else computers.map { if(it.id == computer.id) computer else it }
-        return ComputerBindings(updated, computer.id, if(computers.isEmpty()) computer.id else defaultId)
+        val updated = if(previous == null) {
+            computers.filterNot { it.pairing.host == pair.host && it.pairing.port == pair.port } + computer
+        } else {
+            computers.map { if(it.id == computer.id) computer else it }
+                .filterNot { it.id != computer.id && it.pairing.host == pair.host && it.pairing.port == pair.port }
+        }
+        val nextDefault = when {
+            computers.isEmpty() -> computer.id
+            defaultId == null -> null
+            previous != null && defaultId == previous.id -> computer.id
+            updated.none { it.id == defaultId } -> computer.id
+            else -> defaultId
+        }
+        return ComputerBindings(updated, computer.id, nextDefault)
     }
     fun select(id: String): ComputerBindings {
         require(computers.any { it.id == id }) { "这台电脑已解除绑定" }

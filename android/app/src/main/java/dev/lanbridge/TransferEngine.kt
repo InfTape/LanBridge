@@ -274,7 +274,7 @@ class TransferEngine(private val app: Application) {
                         android.util.Log.e("LanBridge","Connection ended",e)
                         authenticationFailed = e is javax.crypto.AEADBadTagException
                         if(authenticationFailed && automatic) {
-                            report("电脑配对信息已更改，请解除绑定后重新扫码")
+                            report("电脑配对码已更新，请重新扫码连接")
                         } else {
                             report(sendDisconnectReason?.takeIf { it.first == id }?.second ?: "连接结束：${friendly(e)}")
                         }

@@ -55,13 +55,51 @@ class ComputerBindingsTest {
         assertEquals(ComputerBindings(), removed.forget())
     }
     @Test fun forgettingMiddleSelectsNextAndRebindingStartsWithDefaultAlias() {
-        val third = office.copy(code = "1111222233334444")
+        val third = office.copy(host = "192.168.0.102", code = "1111222233334444")
         val all = ComputerBindings.migrate(office, "办公室").remember(home).rename("家里").remember(third)
         val removed = all.select(all.computers[1].id).forget()
         assertEquals(all.computers.last().id, removed.selectedId)
         val rebound = removed.remember(home)
         assertEquals("", rebound.current!!.name)
         assertNotEquals(all.computers[1].id, rebound.selectedId)
+    }
+    @Test fun rePairingSameEndpointUpdatesCredentialAndPreservesDefaultWithoutDuplication() {
+        val first = ComputerBindings.migrate(office, "办公室")
+        assertEquals(1, first.computers.size)
+        assertEquals(first.computers.first().id, first.defaultId)
+
+        // PC regenerates pairing code; host and port remain the same
+        val renewed = office.copy(code = "9999888877776666")
+        val updated = first.remember(renewed)
+
+        // Must update existing computer, preserve ID, custom name and defaultId without duplicating
+        assertEquals(1, updated.computers.size)
+        assertEquals(first.computers.first().id, updated.computers.first().id)
+        assertEquals("办公室", updated.current!!.name)
+        assertEquals(renewed, updated.current!!.pairing)
+        assertEquals(first.defaultId, updated.defaultId)
+        assertEquals(first.defaultId, updated.forStartup().selectedId)
+    }
+    @Test fun rePairingPrunesOrphanGhostsAndMigratesDefunctDefault() {
+        val oldA = SavedComputer("id-1", office, "我的电脑")
+        // Stale record created by old bug: same host & port, but different defunct pairing code
+        val oldGhost = SavedComputer("id-ghost", office.copy(code = "0000000000000000"), "重命名电脑")
+        val homePc = SavedComputer("id-home", home, "家里")
+        // defaultId was pointing to the ghost
+        val corrupted = ComputerBindings(listOf(oldA, oldGhost, homePc), selectedId = "id-1", defaultId = "id-ghost")
+
+        // Now re-pairing office with new code
+        val renewed = office.copy(code = "1111111111111111")
+        val healed = corrupted.remember(renewed)
+
+        // The ghost must be pruned, only id-1 and id-home remain
+        assertEquals(2, healed.computers.size)
+        assertEquals(setOf("id-1", "id-home"), healed.computers.map { it.id }.toSet())
+        assertEquals("我的电脑", healed.current!!.name)
+        assertEquals(renewed, healed.current!!.pairing)
+        // defaultId must be self-healed and migrated to id-1
+        assertEquals("id-1", healed.defaultId)
+        assertEquals("id-1", healed.forStartup().selectedId)
     }
     @Test fun repeatedFastSwitchesPreserveAllCredentialsAndLastSelection() {
         var book = ComputerBindings.migrate(office, "办公室").remember(home).rename("家里")
