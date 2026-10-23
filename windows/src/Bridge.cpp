@@ -1,5 +1,6 @@
 #include "Bridge.h"
 #include "FolderTransfer.h"
+#include "CngAlgorithm.h"
 #include <bcrypt.h>
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
@@ -29,11 +30,16 @@ uint64_t Get64(const Bytes& b,size_t offset) {
 }
 Bytes Random(size_t n) { Bytes b(n); Check(BCryptGenRandom(nullptr,b.data(),static_cast<ULONG>(n),BCRYPT_USE_SYSTEM_PREFERRED_RNG)); return b; }
 class Hash {
-    BCRYPT_ALG_HANDLE alg_=nullptr;
+    cng::Algorithm alg_;
     BCRYPT_HASH_HANDLE hash_=nullptr;
 public:
-    Hash() { Check(BCryptOpenAlgorithmProvider(&alg_,BCRYPT_SHA256_ALGORITHM,nullptr,0)); Check(BCryptCreateHash(alg_,&hash_,nullptr,0,nullptr,0,0)); }
-    ~Hash() { if(hash_) BCryptDestroyHash(hash_); if(alg_) BCryptCloseAlgorithmProvider(alg_,0); }
+    Hash() {
+        BCRYPT_ALG_HANDLE algorithm=nullptr;
+        Check(BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0));
+        alg_.reset(algorithm);
+        Check(BCryptCreateHash(alg_.get(),&hash_,nullptr,0,nullptr,0,0));
+    }
+    ~Hash() { if(hash_) BCryptDestroyHash(hash_); }
     void Add(const Bytes& b) { Check(BCryptHashData(hash_,const_cast<PUCHAR>(b.data()),static_cast<ULONG>(b.size()),0)); }
     Bytes Finish() { Bytes b(32); Check(BCryptFinishHash(hash_,b.data(),32,0)); return b; }
 };
@@ -108,16 +114,19 @@ std::vector<LocalAddress> LocalAddresses() {
 Channel::Channel(SOCKET socket,const std::string& code,const Bytes& salt,bool server):socket_(socket),server_(server) {
     BCRYPT_ALG_HANDLE sha=nullptr;
     Check(BCryptOpenAlgorithmProvider(&sha,BCRYPT_SHA256_ALGORITHM,nullptr,BCRYPT_ALG_HANDLE_HMAC_FLAG));
+    cng::Algorithm shaOwner(sha);
     Bytes secret(32);
     auto status=BCryptDeriveKeyPBKDF2(sha,reinterpret_cast<PUCHAR>(const_cast<char*>(code.data())),static_cast<ULONG>(code.size()),const_cast<PUCHAR>(salt.data()),static_cast<ULONG>(salt.size()),120000,secret.data(),32,0);
-    BCryptCloseAlgorithmProvider(sha,0); Check(status);
+    shaOwner.reset(); Check(status);
     BCRYPT_ALG_HANDLE aes=nullptr;
-    Check(BCryptOpenAlgorithmProvider(&aes,BCRYPT_AES_ALGORITHM,nullptr,0)); algorithm_=aes;
+    Check(BCryptOpenAlgorithmProvider(&aes,BCRYPT_AES_ALGORITHM,nullptr,0));
+    cng::Algorithm aesOwner(aes);
     Check(BCryptSetProperty(aes,BCRYPT_CHAINING_MODE,reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_GCM)),sizeof(BCRYPT_CHAIN_MODE_GCM),0));
     ULONG objectSize=0,n=0; Check(BCryptGetProperty(aes,BCRYPT_OBJECT_LENGTH,reinterpret_cast<PUCHAR>(&objectSize),sizeof(objectSize),&n,0));
     keyObject_.resize(objectSize);
     BCRYPT_KEY_HANDLE key=nullptr;
-    Check(BCryptGenerateSymmetricKey(aes,&key,keyObject_.data(),objectSize,secret.data(),32,0)); key_=key;
+    Check(BCryptGenerateSymmetricKey(aes,&key,keyObject_.data(),objectSize,secret.data(),32,0));
+    key_=key; algorithm_=aesOwner.release();
     SecureZeroMemory(secret.data(),secret.size());
 }
 Channel::~Channel() { Close(); closesocket(socket_); if(key_) BCryptDestroyKey(static_cast<BCRYPT_KEY_HANDLE>(key_)); if(algorithm_) BCryptCloseAlgorithmProvider(static_cast<BCRYPT_ALG_HANDLE>(algorithm_),0); }

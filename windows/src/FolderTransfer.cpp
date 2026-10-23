@@ -1,4 +1,5 @@
 #include "FolderTransfer.h"
+#include "CngAlgorithm.h"
 #include <bcrypt.h>
 #include <algorithm>
 #include <fstream>
@@ -20,10 +21,15 @@ void NoLinkedParents(const std::filesystem::path& path) {
     for(const auto& part:path.relative_path()) { current/=part; PlainDirectory(current); }
 }
 class Digest {
-    BCRYPT_ALG_HANDLE algorithm_=nullptr; BCRYPT_HASH_HANDLE hash_=nullptr;
+    cng::Algorithm algorithm_; BCRYPT_HASH_HANDLE hash_=nullptr;
 public:
-    Digest() { Require(BCryptOpenAlgorithmProvider(&algorithm_,BCRYPT_SHA256_ALGORITHM,nullptr,0)>=0,"SHA256 unavailable"); Require(BCryptCreateHash(algorithm_,&hash_,nullptr,0,nullptr,0,0)>=0,"SHA256 unavailable"); }
-    ~Digest() { if(hash_) BCryptDestroyHash(hash_); if(algorithm_) BCryptCloseAlgorithmProvider(algorithm_,0); }
+    Digest() {
+        BCRYPT_ALG_HANDLE algorithm=nullptr;
+        Require(BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0)>=0,"SHA256 unavailable");
+        algorithm_.reset(algorithm);
+        Require(BCryptCreateHash(algorithm_.get(),&hash_,nullptr,0,nullptr,0,0)>=0,"SHA256 unavailable");
+    }
+    ~Digest() { if(hash_) BCryptDestroyHash(hash_); }
     void Add(const Bytes& bytes) { Require(BCryptHashData(hash_,const_cast<PUCHAR>(bytes.data()),static_cast<ULONG>(bytes.size()),0)>=0,"SHA256 failed"); }
     Bytes Finish() { Bytes out(32); Require(BCryptFinishHash(hash_,out.data(),32,0)>=0,"SHA256 failed"); return out; }
 };
