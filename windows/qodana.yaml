@@ -10,3 +10,17 @@ exclude:
     paths:
       - build
       - third_party
+  # Optional source-style migrations, not correctness defects. See
+  # docs/qodana-policy.md for the reviewed scope and retained safety checks.
+  - name: CppInconsistentNaming
+  - name: CppParameterMayBeConst
+  - name: CppUseDesignatedInitializers
+  - name: CppTooWideScopeInitStatement
+  - name: CppTooWideScope
+  - name: CppUseRangeAlgorithm
+  - name: CppClangTidyModernizeUseRanges
+  - name: CppUseStructuredBinding
+  - name: CppClangTidyModernizeUseScopedLock
+  - name: CppClangTidyClangDiagnosticPadded
+  - name: CppClangTidyPerformanceEnumSize
+  - name: CppClangTidyReadabilityEnumInitialValue

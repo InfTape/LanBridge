@@ -1,4 +1,6 @@
 #include "Pairing.h"
+#include "CngAlgorithm.h"
+#include "CheckedSize.h"
 #include <bcrypt.h>
 #include <dpapi.h>
 #include <shlobj.h>
@@ -13,13 +15,18 @@ bool Valid(const std::string& code) {
 }
 struct Blob {
     DATA_BLOB data{};
+    Blob()=default;
+    Blob(const Blob&)=delete;
+    Blob& operator=(const Blob&)=delete;
+    Blob(Blob&&)=delete;
+    Blob& operator=(Blob&&)=delete;
     ~Blob() { if(data.pbData) { SecureZeroMemory(data.pbData,data.cbData); LocalFree(data.pbData); } }
 };
 }
 std::filesystem::path CredentialPath() {
     PWSTR value=nullptr;
     if(FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&value))) throw std::runtime_error("Cannot find local pairing storage");
-    std::filesystem::path path(value); CoTaskMemFree(value);
+    const std::filesystem::path path(value); CoTaskMemFree(value);
     return path/L"LanBridge"/L"pairing.dat";
 }
 void Save(const std::filesystem::path& path,const std::string& code) {
@@ -37,10 +44,10 @@ void Save(const std::filesystem::path& path,const std::string& code) {
 }
 std::string LoadOrCreate(const std::filesystem::path& path) {
     if(!std::filesystem::exists(path)) { auto code=bridge::RandomCode(); Save(path,code); return code; }
-    auto size=std::filesystem::file_size(path);
+    const auto size=std::filesystem::file_size(path);
     if(!size || size>4096) throw std::runtime_error("Invalid pairing storage");
     bridge::Bytes bytes(static_cast<size_t>(size)); std::ifstream file(path,std::ios::binary);
-    if(!file.read(reinterpret_cast<char*>(bytes.data()),bytes.size())) throw std::runtime_error("Cannot read pairing credentials");
+    if(!file.read(reinterpret_cast<char*>(bytes.data()),bridge::CheckedSize<std::streamsize>(bytes.size()))) throw std::runtime_error("Cannot read pairing credentials");
     DATA_BLOB encrypted{static_cast<DWORD>(bytes.size()),bytes.data()}; Blob plain;
     if(!CryptUnprotectData(&encrypted,nullptr,nullptr,nullptr,nullptr,CRYPTPROTECT_UI_FORBIDDEN,&plain.data)) throw std::runtime_error("Cannot unlock pairing credentials for this Windows user");
     std::string code(reinterpret_cast<char*>(plain.data.pbData),plain.data.cbData);
@@ -53,9 +60,9 @@ bridge::Bytes DiscoveryReply(const bridge::Bytes& request,uint16_t port,const st
     reply.insert(reply.end(),request.begin()+4,request.end()); reply.push_back(static_cast<unsigned char>(port>>8)); reply.push_back(static_cast<unsigned char>(port));
     BCRYPT_ALG_HANDLE algorithm=nullptr;
     if(BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,BCRYPT_ALG_HANDLE_HMAC_FLAG)<0) throw std::runtime_error("Discovery HMAC algorithm");
+    const bridge::cng::Algorithm owner(algorithm);
     bridge::Bytes mac(32);
-    auto result=BCryptHash(algorithm,reinterpret_cast<PUCHAR>(const_cast<char*>(code.data())),static_cast<ULONG>(code.size()),reply.data(),static_cast<ULONG>(reply.size()),mac.data(),32);
-    BCryptCloseAlgorithmProvider(algorithm,0);
+    const auto result=BCryptHash(algorithm,reinterpret_cast<PUCHAR>(const_cast<char*>(code.data())),static_cast<ULONG>(code.size()),reply.data(),static_cast<ULONG>(reply.size()),mac.data(),32);
     if(result<0) throw std::runtime_error("Discovery HMAC failed");
     reply.insert(reply.end(),mac.begin(),mac.end()); return reply;
 }
@@ -65,19 +72,35 @@ void Discovery::Stop() { stopping_=true; if(thread_.joinable()) thread_.join(); 
 void Discovery::Start(const std::string& code,uint16_t transferPort,uint16_t discoveryPort) {
     Stop(); stopping_=false;
     thread_=std::thread([this,code,transferPort,discoveryPort] {
-        SOCKET socket=::socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP); if(socket==INVALID_SOCKET) return;
-        DWORD timeout=250; setsockopt(socket,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<char*>(&timeout),sizeof(timeout));
+        const SOCKET socket=::socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP); if(socket==INVALID_SOCKET) return;
+        DWORD timeout=250;
+        if(setsockopt(socket,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<char*>(&timeout),sizeof(timeout))==SOCKET_ERROR) {
+            OutputDebugStringW(L"LanBridge: cannot set discovery receive timeout\n"); closesocket(socket); return;
+        }
         BOOL exclusive=TRUE; setsockopt(socket,SOL_SOCKET,SO_EXCLUSIVEADDRUSE,reinterpret_cast<char*>(&exclusive),sizeof(exclusive));
         sockaddr_in local{}; local.sin_family=AF_INET; local.sin_port=htons(discoveryPort);
+        bool failureReported=false;
         if(bind(socket,reinterpret_cast<sockaddr*>(&local),sizeof(local))==0) {
             while(!stopping_) {
                 unsigned char buffer[64]{}; sockaddr_in peer{}; int length=sizeof(peer);
-                int count=recvfrom(socket,reinterpret_cast<char*>(buffer),sizeof(buffer),0,reinterpret_cast<sockaddr*>(&peer),&length);
-                if(count<=0) continue;
+                const int count=recvfrom(socket,reinterpret_cast<char*>(buffer),sizeof(buffer),0,reinterpret_cast<sockaddr*>(&peer),&length);
+                if(count==SOCKET_ERROR) {
+                    const auto error=WSAGetLastError();
+                    // Oversized datagrams and UDP ICMP errors are peer input,
+                    // not a reason to terminate the discovery service.
+                    if(error==WSAETIMEDOUT || error==WSAEMSGSIZE || error==WSAECONNRESET) continue;
+                    OutputDebugStringW(L"LanBridge: discovery receive failed\n"); break;
+                }
+                if(count==0) continue;
                 try {
                     auto reply=DiscoveryReply(bridge::Bytes(buffer,buffer+count),transferPort,code);
                     if(!reply.empty()) sendto(socket,reinterpret_cast<const char*>(reply.data()),static_cast<int>(reply.size()),0,reinterpret_cast<sockaddr*>(&peer),length);
-                } catch(...) { /* A malformed request must not stop discovery. */ }
+                } catch(...) {
+                    // Invalid datagrams return an empty reply. Exceptions here
+                    // indicate a local crypto/allocation failure; avoid log spam.
+                    if(!failureReported) OutputDebugStringW(L"LanBridge: discovery reply failed; service remains active\n");
+                    failureReported=true;
+                }
             }
         }
         closesocket(socket);

@@ -4,9 +4,14 @@
 #include <memory>
 
 namespace bridge::cng {
+// Cleanup failure is diagnostic only; destructors must not replace an active
+// exception with another failure.
+inline void Cleanup(NTSTATUS status) noexcept {
+    if(status<0) OutputDebugStringW(L"LanBridge: CNG resource cleanup failed\n");
+}
 struct AlgorithmCloser {
     void operator()(BCRYPT_ALG_HANDLE value) const noexcept {
-        BCryptCloseAlgorithmProvider(value,0);
+        Cleanup(BCryptCloseAlgorithmProvider(value,0));
     }
 };
 // Own the provider before any later initialization step can throw. unique_ptr

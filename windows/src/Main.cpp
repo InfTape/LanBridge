@@ -1,5 +1,6 @@
 #include "Bridge.h"
 #include "ShellTransfer.h"
+#include "FolderPicker.h"
 #include "Startup.h"
 #include "Pairing.h"
 #include "ContextMenu.h"
@@ -59,7 +60,6 @@ class App {
     int dpi_=96;
     bool exiting_=false;
     bool receiving_=false;
-    bool senderProgress_=false;
     bool startupEnabled_=false;
     bool updatingTextScroll_=false;
     bool trayVersion4_=false;
@@ -70,16 +70,21 @@ class App {
     ui::TitleBar titleBar_;
     ui::PopupMenu popup_;
 public:
+    App()=default;
+    App(const App&)=delete;
+    App& operator=(const App&)=delete;
+    App(App&&)=delete;
+    App& operator=(App&&)=delete;
     ~App() { StopAddressNotifications(); discovery_.Stop(); if(server_) server_->Stop(); if(sender_.joinable()) sender_.join(); if(integration_.joinable()) integration_.join(); if(font_) DeleteObject(font_); DeleteObject(background_); DeleteObject(card_); }
     int Run(HINSTANCE instance,int show,const shelltransfer::Paths& initial = {},bool startupLaunch=false) {
         folder_=bridge::ReceiveDirectory(); code_=pairing::LoadOrCreate(pairing::CredentialPath());
-        WNDCLASSEXW wc{sizeof(wc)}; wc.lpfnWndProc=Proc; wc.hInstance=instance; wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
+        WNDCLASSEXW wc{}; wc.cbSize=sizeof(wc); wc.lpfnWndProc=Proc; wc.hInstance=instance; wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
         wc.hIcon=LoadAppIcon(GetSystemMetricsForDpi(SM_CXICON,GetDpiForSystem())); wc.hIconSm=LoadAppIcon(GetSystemMetricsForDpi(SM_CXSMICON,GetDpiForSystem())); wc.lpszClassName=L"LanBridgeWindow";
         RegisterClassExW(&wc);
         RECT area{}; SystemParametersInfoW(SPI_GETWORKAREA,0,&area,0);
-        int scale=GetDpiForSystem();
-        int width=std::min(MulDiv(WindowWidth,scale,96),static_cast<int>(area.right-area.left));
-        int height=std::min(MulDiv(WindowHeight,scale,96),static_cast<int>(area.bottom-area.top));
+        const int scale=ui::DpiValue(GetDpiForSystem());
+        const int width=std::min(MulDiv(WindowWidth,scale,96),static_cast<int>(area.right-area.left));
+        const int height=std::min(MulDiv(WindowHeight,scale,96),static_cast<int>(area.bottom-area.top));
         window_=CreateWindowExW(WS_EX_ACCEPTFILES,wc.lpszClassName,L"局域网互传",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,width,height,nullptr,nullptr,instance,this);
         if(!window_) return 1;
         server_=std::make_unique<bridge::Server>(folder_,[this](bridge::Event e) { Queue(std::move(e)); });
@@ -94,8 +99,10 @@ public:
         ShowWindow(window_,show); UpdateWindow(window_);
         if(!startupLaunch) EnsureContextMenu();
         if(!initial.empty()) AcceptFiles(initial);
-        MSG m; while(GetMessageW(&m,nullptr,0,0)>0) { if(!IsDialogMessageW(window_,&m)) { TranslateMessage(&m); DispatchMessageW(&m); } }
-        return static_cast<int>(m.wParam);
+        MSG m{};
+        BOOL message;
+        while((message=GetMessageW(&m,nullptr,0,0))>0) { if(!IsDialogMessageW(window_,&m)) { TranslateMessage(&m); DispatchMessageW(&m); } }
+        return message==-1 ? 1 : static_cast<int>(m.wParam);
     }
 private:
     int S(int x) const { return MulDiv(x,dpi_,96); }
@@ -119,7 +126,7 @@ private:
         controls_.push_back({h,{}}); return h;
     }
     void Create() {
-        dpi_=GetDpiForWindow(window_);
+        dpi_=ui::DpiValue(GetDpiForWindow(window_));
         if(!titleBar_.Create(window_,GetModuleHandleW(nullptr))) throw std::runtime_error("无法创建标题栏");
         Control(L"STATIC",L"01   扫码连接",12);
         Control(L"STATIC",L"配对二维码",Qr,SS_OWNERDRAW);
@@ -155,19 +162,22 @@ private:
         Control(PROGRESS_CLASSW,L"",Progress,PBS_SMOOTH);
         Control(L"STATIC",L"启动中…",Status);
         UpdateQr(); FontSetup(); Layout();
-        BOOL dark=FALSE; DwmSetWindowAttribute(window_,20,&dark,sizeof(dark));
+        constexpr BOOL dark=FALSE;
+        // Cosmetic only: older Windows versions keep the default title bar.
+        const auto appearance=DwmSetWindowAttribute(window_,20,&dark,sizeof(dark));
+        if(FAILED(appearance)) OutputDebugStringW(L"LanBridge: default title bar appearance retained\n");
         tray_.cbSize=sizeof(tray_); tray_.hWnd=window_; tray_.uID=1; tray_.uFlags=NIF_ICON|NIF_MESSAGE|NIF_TIP; tray_.uCallbackMessage=TrayMessage; tray_.hIcon=LoadAppIcon(GetSystemMetricsForDpi(SM_CXSMICON,dpi_));
         wcscpy_s(tray_.szTip,L"LanBridge · 局域网互传"); Shell_NotifyIconW(NIM_ADD,&tray_);
         tray_.uVersion=NOTIFYICON_VERSION_4; trayVersion4_=Shell_NotifyIconW(NIM_SETVERSION,&tray_)!=FALSE;
     }
     void Place(int id,int x,int y,int w,int h) { MoveWindow(Item(id),S(x),S(y+ui::TitleBar::kHeight),S(w),S(h),TRUE); }
     void Layout() {
-        RECT rc; GetClientRect(window_,&rc); int w=MulDiv(rc.right,96,dpi_),h=MulDiv(rc.bottom,96,dpi_)-ui::TitleBar::kHeight;
+        RECT rc; GetClientRect(window_,&rc); const int w=MulDiv(rc.right,96,dpi_),h=MulDiv(rc.bottom,96,dpi_)-ui::TitleBar::kHeight;
         titleBar_.Layout(rc.right);
-        int right=w-364,editor=right-ActionButtonWidth-15;
+        const int right=w-364,editor=right-ActionButtonWidth-15;
         const int actionX=w-40-ActionButtonWidth;
         // The card supplies the QR quiet zone outside the square image.
-        const int qrEdge=SendInputHeight,afterQr=69+qrEdge+20;
+        constexpr int qrEdge=SendInputHeight,afterQr=69+qrEdge+20;
         Place(12,40,29,246,28); Place(Qr,40+(246-qrEdge)/2,69,qrEdge,qrEdge);
         Place(15,40,afterQr+5,246,28);
         Place(13,40,afterQr+42,80,25); Place(Ip,124,afterQr+38,162,240);
@@ -193,7 +203,7 @@ private:
         updatingTextScroll_=false;
     }
     std::wstring Value(int id) {
-        int n=GetWindowTextLengthW(Item(id)); std::wstring text(n+1,L'\0'); GetWindowTextW(Item(id),text.data(),n+1); text.resize(n); return text;
+        const int n=GetWindowTextLengthW(Item(id)); std::wstring text(n+1,L'\0'); GetWindowTextW(Item(id),text.data(),n+1); text.resize(n); return text;
     }
     void StatusText(const std::wstring& s) { SetWindowTextW(Item(Status),s.c_str()); }
     static VOID CALLBACK AddressChanged(PVOID context,PMIB_UNICASTIPADDRESS_ROW,MIB_NOTIFICATION_TYPE) {
@@ -218,7 +228,7 @@ private:
         const bool automatic=!addresses.empty() && addresses.front().autoSelect;
         if(!automatic) items.emplace_back(L"请选择局域网 IPv4 地址");
         for(const auto& address:addresses) items.push_back(address.address);
-        auto pinned=std::find_if(addresses.begin(),addresses.end(),[&](const auto& address){return address.address==previous;});
+        const auto pinned=std::find_if(addresses.begin(),addresses.end(),[&](const auto& address){return address.address==previous;});
         if(manualAddress_ && pinned==addresses.end()) manualAddress_=false;
         const auto selected=manualAddress_?previous:items.front();
         const auto combo=Item(Ip);
@@ -235,7 +245,7 @@ private:
             for(const auto& item:items) SendMessageW(combo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(item.c_str()));
         }
         if(changed || previous!=selected) {
-            auto index=std::find(items.begin(),items.end(),selected)-items.begin();
+            const auto index=std::find(items.begin(),items.end(),selected)-items.begin();
             SendMessageW(combo,CB_SETCURSEL,index,0);
             if(changed) { SendMessageW(combo,WM_SETREDRAW,TRUE,0); InvalidateRect(combo,nullptr,TRUE); }
             UpdateQr();
@@ -244,7 +254,7 @@ private:
     std::wstring ConnectionUri() { return L"lanbridge://"+Value(Ip)+L":42831/"+bridge::Wide(code_); }
     void UpdateQr() {
         try {
-            auto address=Value(Ip);
+            const auto address=Value(Ip);
             if(address.empty() || address.find(L"地址")!=std::wstring::npos) { qr_.reset(); }
             else qr_=qrcodegen::QrCode::encodeText(bridge::Utf8(ConnectionUri()).c_str(),qrcodegen::QrCode::Ecc::MEDIUM);
         } catch(...) { qr_.reset(); }
@@ -254,7 +264,7 @@ private:
     void DrawQr(const DRAWITEMSTRUCT& item) {
         FillRect(item.hDC,&item.rcItem,static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
         if(!qr_) {
-            int saved=SaveDC(item.hDC); SelectObject(item.hDC,font_); SetBkMode(item.hDC,TRANSPARENT); SetTextColor(item.hDC,RGB(36,47,65));
+            const int saved=SaveDC(item.hDC); SelectObject(item.hDC,font_); SetBkMode(item.hDC,TRANSPARENT); SetTextColor(item.hDC,RGB(36,47,65));
             DrawTextW(item.hDC,L"请连接局域网并选择电脑地址",-1,const_cast<RECT*>(&item.rcItem),DT_CENTER|DT_VCENTER|DT_WORDBREAK); RestoreDC(item.hDC,saved); return;
         }
         const int n=qr_->getSize();
@@ -269,7 +279,7 @@ private:
     bool Send(std::function<void()> work) {
         if(!server_->IsConnected() || sending_.exchange(true)) return false;
         if(sender_.joinable()) sender_.join();
-        for(int id:{SendText,SendClipboard,SendFile,SendFolder}) EnableWindow(Item(id),FALSE);
+        for(const int id:{SendText,SendClipboard,SendFile,SendFolder}) EnableWindow(Item(id),FALSE);
         sender_=std::thread([this,work=std::move(work)]() mutable {
             try { work(); } catch(const std::exception& e) { Queue({bridge::Event::Error,bridge::Wide(e.what())}); }
             work={}; // Release temporary clipboard images before reporting completion.
@@ -330,13 +340,17 @@ private:
                 if(!std::filesystem::is_regular_file(script)) throw std::runtime_error("请将便携包完整解压后再启用右键菜单");
                 if(contextmenu::IsCurrent(script.parent_path().parent_path())) return;
                 wchar_t system[MAX_PATH]{},temporary[MAX_PATH]{};
-                GetSystemDirectoryW(system,MAX_PATH); GetTempPathW(MAX_PATH,temporary);
-                GUID guid{}; CoCreateGuid(&guid); wchar_t token[40]{}; StringFromGUID2(guid,token,40);
+                const auto systemLength=GetSystemDirectoryW(system,MAX_PATH);
+                const auto tempLength=GetTempPathW(MAX_PATH,temporary);
+                if(!systemLength || systemLength>=MAX_PATH || !tempLength || tempLength>=MAX_PATH) throw std::runtime_error("Cannot find menu registration directories");
+                GUID guid{}; win32::Check(CoCreateGuid(&guid),"Cannot create menu registration ID");
+                wchar_t token[40]{};
+                if(!StringFromGUID2(guid,token,40)) throw std::runtime_error("Cannot format menu registration ID");
                 log=std::filesystem::path(temporary)/(L"LanBridge-menu-"+std::wstring(token)+L".log");
                 auto powershell=std::filesystem::path(system)/L"WindowsPowerShell"/L"v1.0"/L"powershell.exe";
                 auto command=shelltransfer::QuoteArgument(powershell.wstring())+L" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "+shelltransfer::QuoteArgument(script.wstring())+
                     L" -Action Enable -NoShellRefresh -LogPath "+shelltransfer::QuoteArgument(log.wstring());
-                STARTUPINFOW startup{sizeof(startup)}; PROCESS_INFORMATION process{};
+                STARTUPINFOW startup{}; startup.cb=sizeof(startup); PROCESS_INFORMATION process{};
                 if(!CreateProcessW(powershell.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&process)) throw std::runtime_error("Cannot start menu registration");
                 CloseHandle(process.hThread); WaitForSingleObject(process.hProcess,INFINITE);
                 DWORD exitCode=1; GetExitCodeProcess(process.hProcess,&exitCode); CloseHandle(process.hProcess);
@@ -352,29 +366,28 @@ private:
     }
     void SelectFiles() {
         std::vector<wchar_t> buffer(65536);
-        OPENFILENAMEW f{sizeof(f)}; f.hwndOwner=window_; f.lpstrFilter=L"所有文件\0*.*\0\0"; f.lpstrFile=buffer.data(); f.nMaxFile=static_cast<DWORD>(buffer.size()); f.Flags=OFN_EXPLORER|OFN_ALLOWMULTISELECT|OFN_FILEMUSTEXIST|OFN_NOCHANGEDIR;
+        OPENFILENAMEW f{}; f.lStructSize=sizeof(f); f.hwndOwner=window_; f.lpstrFilter=L"所有文件\0*.*\0\0"; f.lpstrFile=buffer.data(); f.nMaxFile=static_cast<DWORD>(buffer.size()); f.Flags=OFN_EXPLORER|OFN_ALLOWMULTISELECT|OFN_FILEMUSTEXIST|OFN_NOCHANGEDIR;
         if(!GetOpenFileNameW(&f)) return;
-        std::vector<std::filesystem::path> paths; std::filesystem::path first(buffer.data());
+        std::vector<std::filesystem::path> paths; const std::filesystem::path first(buffer.data());
         auto p=buffer.data()+wcslen(buffer.data())+1;
         if(!*p) paths.push_back(first); else while(*p) { paths.push_back(first/p); p+=wcslen(p)+1; }
         Files(paths);
     }
     void SelectFolder() {
-        Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
-        if(FAILED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog)))) { StatusText(L"无法打开文件夹选择器"); return; }
-        DWORD flags=0; dialog->GetOptions(&flags); dialog->SetOptions(flags|FOS_PICKFOLDERS|FOS_ALLOWMULTISELECT|FOS_PATHMUSTEXIST|FOS_NOCHANGEDIR);
-        dialog->SetTitle(L"选择要发送到手机的文件夹");
-        if(FAILED(dialog->Show(window_))) return;
-        Microsoft::WRL::ComPtr<IShellItemArray> items; if(FAILED(dialog->GetResults(&items))) return;
-        DWORD count=0; items->GetCount(&count); shelltransfer::Paths paths;
-        for(DWORD i=0;i<count;++i) {
-            Microsoft::WRL::ComPtr<IShellItem> item; if(FAILED(items->GetItemAt(i,&item))) continue;
-            PWSTR path=nullptr; if(SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH,&path))) { paths.emplace_back(path); CoTaskMemFree(path); }
-        }
-        Files(paths);
+        try {
+            Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
+            win32::Check(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog)),"Cannot open folder picker");
+            folderpicker::Configure(*dialog.Get());
+            const auto shown=dialog->Show(window_);
+            if(shown==HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
+            win32::Check(shown,"Cannot show folder picker");
+            Microsoft::WRL::ComPtr<IShellItemArray> items;
+            win32::Check(dialog->GetResults(&items),"Cannot read selected folders");
+            Files(folderpicker::Selection(*items.Get()));
+        } catch(const std::exception& e) { StatusText(L"选择文件夹失败："+bridge::Wide(e.what())); }
     }
     void RecordReceived(Record record) {
-        auto attributes=record.file?GetFileAttributesW(record.path.c_str()):INVALID_FILE_ATTRIBUTES;
+        const auto attributes=record.file?GetFileAttributesW(record.path.c_str()):INVALID_FILE_ATTRIBUTES;
         auto label=record.file ? std::wstring(attributes!=INVALID_FILE_ATTRIBUTES && (attributes&FILE_ATTRIBUTE_DIRECTORY)?L"文件夹  ·  ":L"文件  ·  ")+record.path.filename().wstring() : L"文本  ·  "+record.text.substr(0,100);
         for(auto& c:label) if(c==L'\n' || c==L'\r' || c==L'\t') c=L' ';
         records_.push_front(std::move(record)); SendMessageW(Item(History),LB_INSERTSTRING,0,reinterpret_cast<LPARAM>(label.c_str()));
@@ -387,7 +400,7 @@ private:
             switch(e.kind) {
             case bridge::Event::Connected: RefreshAddresses(); if(!e.message.empty()) StatusText(e.message); break;
             case bridge::Event::Text: {
-                bool ok=bridge::CopyText(window_,e.message); RecordReceived({false,e.message,{}});
+                const bool ok=bridge::CopyText(window_,e.message); RecordReceived({false,e.message,{}});
                 StatusText(ok?L"收到文本 · 已自动复制到剪贴板":L"收到文本 · 剪贴板暂时被占用，请点重新复制");
                 server_->Acknowledge(ok?L"Windows 已接收文本并复制到剪贴板":L"Windows 已接收文本，剪贴板占用"); break;
             }
@@ -395,7 +408,7 @@ private:
             case bridge::Event::File: {
                 receiving_=false;
                 if(e.path.empty()) { StatusText(e.message); break; }
-                bool ok=bridge::CopyFiles(window_,{e.path}); RecordReceived({true,L"",e.path});
+                const bool ok=bridge::CopyFiles(window_,{e.path}); RecordReceived({true,L"",e.path});
                 StatusText(ok?L"收到 "+e.message+L" · 已复制到文件剪贴板":L"文件已保存 · 剪贴板暂时被占用，请点重新复制");
                 server_->Acknowledge(ok?L"Windows 已保存并复制文件："+e.message:L"Windows 已保存文件，剪贴板占用"); break;
             }
@@ -403,22 +416,24 @@ private:
             case bridge::Event::Progress: {
                 if(e.kind==bridge::Event::FolderProgress) receiving_=true;
                 else if(e.message.starts_with(L"接收")) receiving_=e.current<e.total;
-                int n=e.total ? static_cast<int>(e.current*100/e.total) : 100;
+                const int n=e.total ? static_cast<int>(e.current*100/e.total) : 100;
                 SendMessageW(Item(Progress),PBM_SETPOS,n,0);
                 StatusText(e.message+L" · "+std::to_wstring(n)+L"%  ("+std::to_wstring(e.current/1024)+L" / "+std::to_wstring(e.total/1024)+L" KiB)"); break;
             }
             case bridge::Event::Disconnected: receiving_=false; [[fallthrough]];
-            default: if(!e.message.empty()) StatusText(e.message); break;
+            case bridge::Event::Info:
+            case bridge::Event::Error:
+            case bridge::Event::Ack: if(!e.message.empty()) StatusText(e.message); break;
             }
         }
-        for(int id:{SendText,SendClipboard,SendFile,SendFolder}) EnableWindow(Item(id),!sending_);
+        for(const int id:{SendText,SendClipboard,SendFile,SendFolder}) EnableWindow(Item(id),!sending_);
         PumpSends();
     }
     void Command(int id) {
         switch(id) {
         case CopyLink: {
             if(!qr_) { StatusText(L"尚未发现可用的电脑地址，请等待局域网连接就绪"); break; }
-            auto uri=ConnectionUri();
+            const auto uri=ConnectionUri();
             StatusText(bridge::CopyText(window_,uri)?L"连接信息已复制，可粘贴到 Android 配对页":L"剪贴板被占用，请重试"); break;
         }
         case Disconnect: server_->Disconnect(); break;
@@ -435,7 +450,7 @@ private:
             break;
         }
         case Startup: {
-            bool enabled=SendMessageW(Item(Startup),BM_GETCHECK,0,0)==BST_CHECKED;
+            const bool enabled=SendMessageW(Item(Startup),BM_GETCHECK,0,0)==BST_CHECKED;
             try {
                 startup::SetEnabled(enabled,startup::ExecutablePath()); startupEnabled_=enabled;
                 StatusText(enabled?L"已开启开机启动 · 登录 Windows 后默认收至托盘":L"已关闭开机启动");
@@ -448,7 +463,7 @@ private:
         case SendText: TextToSend(Value(Text)); break;
         case SendClipboard: {
             try {
-                auto files=bridge::ReadFiles(window_);
+                const auto files=bridge::ReadFiles(window_);
                 if(!files.empty()) Files(files);
                 else if(auto image=bridge::ReadImage(window_)) {
                     AcceptSend([this,image] { server_->SendFiles({*image}); });
@@ -461,18 +476,19 @@ private:
         case OpenFolder: ShellExecuteW(window_,L"open",folder_.c_str(),nullptr,nullptr,SW_SHOWNORMAL); break;
         case Clear: records_.clear(); SendMessageW(Item(History),LB_RESETCONTENT,0,0); break;
         case Recopy: {
-            int i=static_cast<int>(SendMessageW(Item(History),LB_GETCURSEL,0,0));
+            const int i=static_cast<int>(SendMessageW(Item(History),LB_GETCURSEL,0,0));
             if(i>=0 && static_cast<size_t>(i)<records_.size()) {
-                const auto& r=records_[i]; bool ok=r.file?bridge::CopyFiles(window_,{r.path}):bridge::CopyText(window_,r.text);
+                const auto& r=records_[i]; const bool ok=r.file?bridge::CopyFiles(window_,{r.path}):bridge::CopyText(window_,r.text);
                 StatusText(ok?L"已重新复制到剪贴板":L"复制失败，请重试");
             } break;
         }
         case Exit: exiting_=true; DestroyWindow(window_); break;
+        default: break;
         }
     }
     void Paint(HDC dc) {
         RECT rc; GetClientRect(window_,&rc); FillRect(dc,&rc,background_);
-        auto oldPen=SelectObject(dc,GetStockObject(NULL_PEN)); auto oldBrush=SelectObject(dc,card_);
+        const auto oldPen=SelectObject(dc,GetStockObject(NULL_PEN)); const auto oldBrush=SelectObject(dc,card_);
         RoundRect(dc,S(24),S(16+ui::TitleBar::kHeight),S(302),rc.bottom-S(63),S(18),S(18));
         RoundRect(dc,S(316),S(16+ui::TitleBar::kHeight),rc.right-S(24),S(249+ui::TitleBar::kHeight),S(18),S(18));
         RoundRect(dc,S(316),S(259+ui::TitleBar::kHeight),rc.right-S(24),rc.bottom-S(63),S(18),S(18));
@@ -491,7 +507,7 @@ private:
         case WM_NCCALCSIZE: return ui::TitleBar::CalculateClient(h,w,l);
         case WM_NCHITTEST: return ui::TitleBar::HitTest(h,l);
         case WM_ACTIVATE: InvalidateRect(h,nullptr,FALSE); break;
-        case WM_SETTEXT: { auto result=DefWindowProcW(h,m,w,l); InvalidateRect(h,nullptr,FALSE); return result; }
+        case WM_SETTEXT: { const auto result=DefWindowProcW(h,m,w,l); InvalidateRect(h,nullptr,FALSE); return result; }
         case WM_CREATE: app->Create(); return 0;
         case WM_SHOWWINDOW:
             if(w) {
@@ -500,14 +516,14 @@ private:
             }
             break;
         case WM_SIZE: if(w!=SIZE_MINIMIZED && app->font_) app->Layout(); return 0;
-        case WM_GETMINMAXINFO: { auto p=reinterpret_cast<MINMAXINFO*>(l); p->ptMinTrackSize={app->S(WindowWidth),app->S(WindowHeight)}; return 0; }
+        case WM_GETMINMAXINFO: { const auto p=reinterpret_cast<MINMAXINFO*>(l); p->ptMinTrackSize={app->S(WindowWidth),app->S(WindowHeight)}; return 0; }
         case WM_DPICHANGED: {
-            app->dpi_=HIWORD(w); app->FontSetup(); auto r=reinterpret_cast<RECT*>(l); SetWindowPos(h,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE); app->Layout(); return 0;
+            app->dpi_=HIWORD(w); app->FontSetup(); const auto r=reinterpret_cast<RECT*>(l); SetWindowPos(h,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE); app->Layout(); return 0;
         }
         case WM_COMMAND: if(app->titleBar_.HandleCommand(LOWORD(w))) return 0; if(LOWORD(w)==Text && HIWORD(w)==EN_CHANGE) app->UpdateTextScrollbar(); else if(LOWORD(w)==Ip && HIWORD(w)==CBN_SELCHANGE) { app->manualAddress_=true; app->UpdateQr(); } else if(LOWORD(w)==History && HIWORD(w)==LBN_DBLCLK) app->Command(Recopy); else if(HIWORD(w)==BN_CLICKED) app->Command(LOWORD(w)); return 0;
         case WM_MEASUREITEM: if(app->popup_.Measure(*reinterpret_cast<MEASUREITEMSTRUCT*>(l))) return TRUE; break;
         case WM_DRAWITEM: {
-            auto item=reinterpret_cast<DRAWITEMSTRUCT*>(l);
+            const auto item=reinterpret_cast<DRAWITEMSTRUCT*>(l);
             if(app->titleBar_.DrawButton(*item) || app->popup_.Draw(*item)) return TRUE;
             if(item->CtlID==Qr) { app->DrawQr(*item); return TRUE; } break;
         }
@@ -520,36 +536,36 @@ private:
             if(w==AddressesFallbackTimer) { app->RefreshAddresses(); return 0; }
             break;
         case WM_COPYDATA: {
-            auto* data=reinterpret_cast<COPYDATASTRUCT*>(l);
+            const auto* const data=reinterpret_cast<const COPYDATASTRUCT*>(l);
             if(!data || data->dwData != shelltransfer::MessageId) return FALSE;
             try { return app->AcceptFiles(shelltransfer::Decode(data->lpData,data->cbData))?TRUE:FALSE; }
             catch(...) { return FALSE; }
         }
         case WM_DROPFILES: {
-            auto drop=reinterpret_cast<HDROP>(w); auto n=DragQueryFileW(drop,0xffffffff,nullptr,0); std::vector<std::filesystem::path> paths;
+            const auto drop=reinterpret_cast<HDROP>(w); const auto n=DragQueryFileW(drop,0xffffffff,nullptr,0); std::vector<std::filesystem::path> paths;
             for(UINT i=0;i<n;i++) { std::wstring p(DragQueryFileW(drop,i,nullptr,0)+1,L'\0'); DragQueryFileW(drop,i,p.data(),static_cast<UINT>(p.size())); p.pop_back(); paths.emplace_back(p); }
             DragFinish(drop); app->Files(paths); return 0;
         }
         case TrayMessage: {
-            UINT event=app->trayVersion4_?LOWORD(l):static_cast<UINT>(l);
+            const UINT event=app->trayVersion4_?LOWORD(l):static_cast<UINT>(l);
             POINT p; if(app->trayVersion4_) p={GET_X_LPARAM(w),GET_Y_LPARAM(w)}; else GetCursorPos(&p);
             if(event==NIN_POPUPOPEN) app->popup_.ShowTooltip(h,p);
             if(event==NIN_POPUPCLOSE) app->popup_.HideTooltip();
             if(event==WM_LBUTTONDBLCLK || event==WM_LBUTTONUP || event==NIN_SELECT || event==NIN_KEYSELECT) { app->popup_.HideTooltip(); ShowWindow(h,SW_RESTORE); SetForegroundWindow(h); }
             if(event==WM_RBUTTONUP || event==WM_CONTEXTMENU) {
                 if(p.x==-1 && p.y==-1) {
-                    NOTIFYICONIDENTIFIER icon{sizeof(icon)}; icon.hWnd=h; icon.uID=1; RECT rect{};
+                    NOTIFYICONIDENTIFIER icon{}; icon.cbSize=sizeof(icon); icon.hWnd=h; icon.uID=1; RECT rect{};
                     if(SUCCEEDED(Shell_NotifyIconGetRect(&icon,&rect))) p={rect.left,rect.top}; else GetCursorPos(&p);
                 }
-                auto menu=CreatePopupMenu(); AppendMenuW(menu,MF_STRING,1,L"显示主窗口");
+                const auto menu=CreatePopupMenu(); AppendMenuW(menu,MF_STRING,1,L"显示主窗口");
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
                 AppendMenuW(menu,MF_STRING|(app->startupEnabled_?MF_CHECKED:0),Startup,L"开机启动");
                 AppendMenuW(menu,MF_SEPARATOR,0,nullptr); AppendMenuW(menu,MF_STRING,Exit,L"退出");
-                auto id=app->popup_.Track(menu,h,p); DestroyMenu(menu);
+                const auto id=app->popup_.Track(menu,h,p); DestroyMenu(menu);
                 if(id==1) { ShowWindow(h,SW_RESTORE); SetForegroundWindow(h); }
                 else if(id) {
                     if(id==Startup) SendMessageW(app->Item(Startup),BM_SETCHECK,app->startupEnabled_?BST_UNCHECKED:BST_CHECKED,0);
-                    app->Command(id);
+                    app->Command(static_cast<int>(id));
                 }
             } return 0;
         }
@@ -557,8 +573,8 @@ private:
         case WM_QUERYENDSESSION: return TRUE;
         case WM_ENDSESSION: if(w) DestroyWindow(h); return 0;
         case WM_CTLCOLORSTATIC: {
-            auto dc=reinterpret_cast<HDC>(w); SetTextColor(dc,RGB(36,47,65)); SetBkMode(dc,TRANSPARENT);
-            int id=GetDlgCtrlID(reinterpret_cast<HWND>(l)); return reinterpret_cast<LRESULT>(id==Status?app->background_:app->card_);
+            const auto dc=reinterpret_cast<HDC>(w); SetTextColor(dc,RGB(36,47,65)); SetBkMode(dc,TRANSPARENT);
+            const int id=GetDlgCtrlID(reinterpret_cast<HWND>(l)); return reinterpret_cast<LRESULT>(id==Status?app->background_:app->card_);
         }
         case WM_CTLCOLORBTN: {
             if(GetDlgCtrlID(reinterpret_cast<HWND>(l))!=Startup) break;
@@ -568,9 +584,10 @@ private:
         case WM_ERASEBKGND: return 1;
         case WM_PRINTCLIENT: app->Paint(reinterpret_cast<HDC>(w)); return 0;
         case WM_PAINT: {
-            PAINTSTRUCT ps; auto dc=BeginPaint(h,&ps); app->Paint(dc); EndPaint(h,&ps); return 0;
+            PAINTSTRUCT ps; const auto dc=BeginPaint(h,&ps); app->Paint(dc); EndPaint(h,&ps); return 0;
         }
         case WM_DESTROY: app->StopAddressNotifications(); KillTimer(h,AddressesTimer); KillTimer(h,AddressesFallbackTimer); if(app->server_) app->server_->Stop(); if(app->sender_.joinable()) app->sender_.join(); Shell_NotifyIconW(NIM_DELETE,&app->tray_); PostQuitMessage(0); return 0;
+        default: break;
         }
         return DefWindowProcW(h,m,w,l);
     }
@@ -578,18 +595,20 @@ private:
 }
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
     shelltransfer::Paths initial;
-    bool startupLaunch=false;
+    bool startupLaunch;
     try {
-        int argc=0; auto argv=CommandLineToArgvW(GetCommandLineW(),&argc);
+        int argc=0; const auto argv=CommandLineToArgvW(GetCommandLineW(),&argc);
         if(!argv) return 1;
-        if(argc==2 && wcscmp(argv[1],L"--refresh-shell")==0) { LocalFree(argv); contextmenu::Refresh(); return 0; }
+        const win32::LocalMemory arguments(static_cast<void*>(argv));
+        if(argc==2 && wcscmp(argv[1],L"--refresh-shell")==0) { contextmenu::Refresh(); return 0; }
         startupLaunch=argc==2 && CompareStringOrdinal(argv[1],-1,L"--startup",-1,TRUE)==CSTR_EQUAL;
-        bool valid=argc==1 || startupLaunch || (argc==3 && wcscmp(argv[1],L"--send-request")==0);
-        std::filesystem::path request=argc==3?argv[2]:L""; LocalFree(argv);
+        const bool valid=argc==1 || startupLaunch || (argc==3 && wcscmp(argv[1],L"--send-request")==0);
+        const std::filesystem::path request=argc==3?argv[2]:L"";
         if(!valid) throw std::runtime_error("Invalid command line");
         if(!request.empty()) initial=shelltransfer::ReadRequest(request);
     } catch(const std::exception& e) { MessageBoxW(nullptr,bridge::Wide(e.what()).c_str(),L"LanBridge",MB_ICONERROR); return 1; }
-    auto mutex=CreateMutexW(nullptr,TRUE,L"Local\\LanBridge.Singleton");
+    const auto mutex=CreateMutexW(nullptr,TRUE,L"Local\\LanBridge.Singleton");
+    if(!mutex) { MessageBoxW(nullptr,L"无法创建程序单实例锁",L"LanBridge",MB_ICONERROR); return 1; }
     if(GetLastError()==ERROR_ALREADY_EXISTS) {
         HWND h=nullptr; for(int i=0;i<100 && !h;i++) { h=FindWindowW(L"LanBridgeWindow",nullptr); if(!h) Sleep(50); }
         bool accepted=true;
@@ -600,8 +619,12 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
         CloseHandle(mutex); return accepted?0:1;
     }
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED); INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_STANDARD_CLASSES|ICC_PROGRESS_CLASS}; InitCommonControlsEx(&controls);
     int result=1;
-    try { App app; result=app.Run(instance,startupLaunch?SW_HIDE:show,initial,startupLaunch); } catch(const std::exception& e) { MessageBoxW(nullptr,bridge::Wide(e.what()).c_str(),L"LanBridge",MB_ICONERROR); }
-    CoUninitialize(); if(mutex) CloseHandle(mutex); return result;
+    try {
+        const win32::Apartment apartment;
+        INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_STANDARD_CLASSES|ICC_PROGRESS_CLASS};
+        if(!InitCommonControlsEx(&controls)) throw std::runtime_error("Cannot initialize Windows controls");
+        App app; result=app.Run(instance,startupLaunch?SW_HIDE:show,initial,startupLaunch);
+    } catch(const std::exception& e) { MessageBoxW(nullptr,bridge::Wide(e.what()).c_str(),L"LanBridge",MB_ICONERROR); }
+    CloseHandle(mutex); return result;
 }
