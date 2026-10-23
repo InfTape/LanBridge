@@ -10,10 +10,10 @@ constexpr size_t MaxPayload = 1024 * 1024;
 constexpr size_t MaxFiles = 1024;
 using Paths = std::vector<std::filesystem::path>;
 std::vector<unsigned char> Encode(const Paths& paths);
-Paths Decode(const void* bytes, size_t size);
+Paths Decode(const void* payload, size_t size);
 std::wstring QuoteArgument(const std::wstring& argument);
 std::filesystem::path WriteRequest(const Paths& paths);
-Paths ReadRequest(const std::filesystem::path& path);
+Paths ReadRequest(const std::filesystem::path& request);
 bool Forward(HWND window, const Paths& paths);
 void Launch(const std::filesystem::path& executable, const Paths& paths);
 }

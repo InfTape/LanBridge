@@ -11,7 +11,7 @@ std::atomic<long> objects{0};
 HMODULE module = nullptr;
 std::filesystem::path ModulePath() {
     std::wstring path(32768,L'\0');
-    DWORD length = GetModuleFileNameW(module,path.data(),static_cast<DWORD>(path.size()));
+    const DWORD length = GetModuleFileNameW(module,path.data(),static_cast<DWORD>(path.size()));
     if(!length || length >= path.size()) throw std::runtime_error("Cannot find shell extension");
     path.resize(length); return path;
 }
@@ -26,7 +26,7 @@ public:
         if(!*value) return E_NOINTERFACE; AddRef(); return S_OK;
     }
     ULONG STDMETHODCALLTYPE AddRef() override { return ++references_; }
-    ULONG STDMETHODCALLTYPE Release() override { auto n = --references_; if(!n) delete this; return n; }
+    ULONG STDMETHODCALLTYPE Release() override { const auto n = --references_; if(!n) delete this; return n; }
     HRESULT STDMETHODCALLTYPE GetTitle(IShellItemArray*, PWSTR* title) override { return SHStrDupW(L"发送到手机",title); }
     HRESULT STDMETHODCALLTYPE GetIcon(IShellItemArray*, PWSTR* icon) override {
         if(!icon) return E_POINTER; *icon = nullptr;
@@ -46,8 +46,8 @@ public:
         for(DWORD i=0;i<count;i++) {
             IShellItem* item = nullptr;
             if(FAILED(items->GetItemAt(i,&item))) return S_OK;
-            PWSTR path = nullptr; auto result = item->GetDisplayName(SIGDN_FILESYSPATH,&path); item->Release();
-            DWORD fileAttributes = SUCCEEDED(result) && path ? GetFileAttributesW(path) : INVALID_FILE_ATTRIBUTES;
+            PWSTR path = nullptr; const auto result = item->GetDisplayName(SIGDN_FILESYSPATH,&path); item->Release();
+            const DWORD fileAttributes = SUCCEEDED(result) && path ? GetFileAttributesW(path) : INVALID_FILE_ATTRIBUTES;
             CoTaskMemFree(path);
             if(fileAttributes == INVALID_FILE_ATTRIBUTES || (fileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return S_OK;
         }
@@ -56,7 +56,9 @@ public:
     HRESULT STDMETHODCALLTYPE Invoke(IShellItemArray* items, IBindCtx*) override {
         if(!items) return E_INVALIDARG;
         try {
-            EXPCMDSTATE state; GetState(items,FALSE,&state);
+            EXPCMDSTATE state=ECS_HIDDEN;
+        const auto stateResult=GetState(items,FALSE,&state);
+        if(FAILED(stateResult)) return stateResult;
             if(state != ECS_ENABLED) return E_INVALIDARG;
             DWORD count = 0; if(FAILED(items->GetCount(&count))) return E_FAIL;
             shelltransfer::Paths paths; paths.reserve(count);
@@ -87,11 +89,11 @@ public:
         if(!*value) return E_NOINTERFACE; AddRef(); return S_OK;
     }
     ULONG STDMETHODCALLTYPE AddRef() override { return ++references_; }
-    ULONG STDMETHODCALLTYPE Release() override { auto n = --references_; if(!n) delete this; return n; }
+    ULONG STDMETHODCALLTYPE Release() override { const auto n = --references_; if(!n) delete this; return n; }
     HRESULT STDMETHODCALLTYPE CreateInstance(IUnknown* outer, REFIID iid, void** value) override {
         if(!value) return E_POINTER; *value = nullptr; if(outer) return CLASS_E_NOAGGREGATION;
         auto* command = new(std::nothrow) Command; if(!command) return E_OUTOFMEMORY;
-        auto result = command->QueryInterface(iid,value); command->Release(); return result;
+        const auto result = command->QueryInterface(iid,value); command->Release(); return result;
     }
     HRESULT STDMETHODCALLTYPE LockServer(BOOL lock) override { if(lock) ++objects; else --objects; return S_OK; }
 };
@@ -105,5 +107,5 @@ extern "C" HRESULT __stdcall DllGetClassObject(REFCLSID clsid, REFIID iid, void*
     if(!value) return E_POINTER; *value = nullptr;
     if(clsid != CommandId) return CLASS_E_CLASSNOTAVAILABLE;
     auto* factory = new(std::nothrow) Factory; if(!factory) return E_OUTOFMEMORY;
-    auto result = factory->QueryInterface(iid,value); factory->Release(); return result;
+    const auto result = factory->QueryInterface(iid,value); factory->Release(); return result;
 }

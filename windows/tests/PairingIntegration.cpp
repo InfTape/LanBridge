@@ -86,12 +86,19 @@ int main(int argc,char** argv) {
             sendto(socket,reinterpret_cast<const char*>(request.data()),static_cast<int>(request.size()),0,reinterpret_cast<sockaddr*>(&address),sizeof(address));
             count=recv(socket,reinterpret_cast<char*>(received.data()),static_cast<int>(received.size()),0);
         }
-        closesocket(socket); Require(count==54,"Live UDP discovery reply"); received.resize(count);
+        Require(count==54,"Live UDP discovery reply"); received.resize(count);
         Require(received==reply,"UDP service must return authenticated nonce and port");
+        bridge::Bytes oversized(512,0xFF);
+        Require(sendto(socket,reinterpret_cast<const char*>(oversized.data()),static_cast<int>(oversized.size()),0,reinterpret_cast<sockaddr*>(&address),sizeof(address))>0,"Oversized discovery datagram");
+        Require(sendto(socket,reinterpret_cast<const char*>(malformed.data()),static_cast<int>(malformed.size()),0,reinterpret_cast<sockaddr*>(&address),sizeof(address))>0,"Malformed discovery datagram");
+        Require(sendto(socket,reinterpret_cast<const char*>(request.data()),static_cast<int>(request.size()),0,reinterpret_cast<sockaddr*>(&address),sizeof(address))>0,"Discovery request after invalid input");
+        count=recv(socket,reinterpret_cast<char*>(received.data()),static_cast<int>(received.size()),0);
+        closesocket(socket);
+        Require(count==54 && received==reply,"Invalid datagram stopped discovery");
         discovery.Stop();
         Require(directory.is_absolute() && std::filesystem::equivalent(directory.parent_path(),std::filesystem::temp_directory_path()) && directory.filename().wstring().starts_with(L"LanBridge-pairing-test-{"),"Temporary cleanup boundary");
         std::filesystem::remove_all(directory);
-        std::cout<<"PASS: DPAPI persistence across restarts, no plaintext secret, reset, corrupt storage rejection, HMAC interoperability and live UDP discovery"<<std::endl;
+        std::cout<<"PASS: DPAPI persistence across restarts, no plaintext secret, reset, corrupt storage rejection, HMAC interoperability and live UDP discovery survives malformed/oversized datagrams"<<std::endl;
         CoUninitialize(); return 0;
     } catch(const std::exception& e) { std::cerr<<"FAIL: "<<e.what()<<std::endl; CoUninitialize(); return 1; }
 }

@@ -11,7 +11,7 @@ The GitHub workflows run on pushes to `main` and `releases/*`, and on pull reque
 
 Open the corresponding Qodana Cloud project to review issues, source locations, and inspection explanations. GitHub run artifacts named `qodana-android-report` and `qodana-windows-report` retain the report and diagnostic logs. A successful workflow confirms the analysis ran; it does not mean the project has no findings.
 
-Both workflows perform full analysis with the recommended profile. They do not apply fixes or commit source changes. No additional zero-issue quality gate or merge protection is imposed during initial adoption. Establish a baseline and agreed failure thresholds after reviewing the first reports.
+Both workflows perform full analysis with the recommended profile. Windows excludes selected optional style migrations after source review; the exact IDs and rationale are documented in [the Windows inspection policy](qodana-policy.md). Safety checks remain enabled. The workflows do not apply fixes or commit source changes. No additional zero-issue quality gate or merge protection is imposed during initial adoption.
 
 Project tokens are managed by the Qodana Cloud GitHub App and stored only in GitHub Actions Secrets. YAML contains secret names, never token values. If a project token is rotated, update its matching repository secret through the Qodana/GitHub settings.
 

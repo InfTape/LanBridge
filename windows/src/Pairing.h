@@ -5,7 +5,7 @@ namespace pairing {
 std::filesystem::path CredentialPath();
 std::string LoadOrCreate(const std::filesystem::path& path);
 void Save(const std::filesystem::path& path, const std::string& code);
-bridge::Bytes DiscoveryReply(const bridge::Bytes& request, uint16_t transferPort, const std::string& code);
+bridge::Bytes DiscoveryReply(const bridge::Bytes& request, uint16_t port, const std::string& code);
 class Discovery {
 public:
     Discovery();

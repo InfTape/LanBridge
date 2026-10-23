@@ -39,6 +39,11 @@ target_link_options(LanBridge PRIVATE /MANIFEST:EMBED /MANIFESTINPUT:${CMAKE_CUR
 set_property(TARGET LanBridge APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/app.manifest)
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(WindowsFailureIntegration tests/WindowsFailureIntegration.cpp)
+  target_link_libraries(WindowsFailureIntegration PRIVATE bridge shelltransfer)
+  target_compile_options(WindowsFailureIntegration PRIVATE /W4 /utf-8 /EHsc)
+  add_test(NAME WindowsFailureIntegration COMMAND WindowsFailureIntegration)
+  set_tests_properties(WindowsFailureIntegration PROPERTIES TIMEOUT 30)
   add_executable(CryptoInitializationIntegration tests/CryptoInitializationIntegration.cpp)
   # This executable compiles the private crypto implementations with fault
   # injection; bridge supplies the same include, definition and system libraries.

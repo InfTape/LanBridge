@@ -14,16 +14,16 @@ bool Open(HWND owner) {
 bool Set(HWND owner, UINT format, HGLOBAL memory) {
     if(!memory) return false;
     if(!Open(owner)) { GlobalFree(memory); return false; }
-    bool ok = EmptyClipboard() && SetClipboardData(format, memory);
+    const bool ok = EmptyClipboard() && SetClipboardData(format, memory);
     CloseClipboard();
     if(!ok) GlobalFree(memory);
     return ok;
 }
 }
 bool CopyText(HWND owner, const std::wstring& text) {
-    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (text.size()+1)*sizeof(wchar_t));
+    const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (text.size()+1)*sizeof(wchar_t));
     if(!memory) return false;
-    auto p=GlobalLock(memory);
+    const auto p=GlobalLock(memory);
     if(!p) { GlobalFree(memory); return false; }
     memcpy(p,text.c_str(),(text.size()+1)*sizeof(wchar_t));
     GlobalUnlock(memory);
@@ -39,7 +39,7 @@ bool CopyFiles(HWND owner, const std::vector<std::filesystem::path>& files) {
         names += std::filesystem::absolute(file).wstring(); names += L'\0';
     }
     names += L'\0';
-    HGLOBAL memory=GlobalAlloc(GMEM_MOVEABLE|GMEM_ZEROINIT,sizeof(DROPFILES)+names.size()*sizeof(wchar_t));
+    const HGLOBAL memory=GlobalAlloc(GMEM_MOVEABLE|GMEM_ZEROINIT,sizeof(DROPFILES)+names.size()*sizeof(wchar_t));
     if(!memory) return false;
     auto* p=static_cast<DROPFILES*>(GlobalLock(memory));
     if(!p) { GlobalFree(memory); return false; }
@@ -52,7 +52,7 @@ bool CopyFiles(HWND owner, const std::vector<std::filesystem::path>& files) {
     {
         HGLOBAL effect=GlobalAlloc(GMEM_MOVEABLE,sizeof(DWORD));
         if(effect) {
-            if(auto v=static_cast<DWORD*>(GlobalLock(effect))) {
+            if(const auto v=static_cast<DWORD*>(GlobalLock(effect))) {
                 *v=DROPEFFECT_COPY; GlobalUnlock(effect);
                 if(!SetClipboardData(RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT),effect)) GlobalFree(effect);
             } else GlobalFree(effect);
@@ -64,8 +64,8 @@ bool CopyFiles(HWND owner, const std::vector<std::filesystem::path>& files) {
 std::wstring ReadText(HWND owner) {
     std::wstring result;
     if(Open(owner)) {
-        if(auto h=GetClipboardData(CF_UNICODETEXT)) {
-            if(auto p=static_cast<const wchar_t*>(GlobalLock(h))) { result=p; GlobalUnlock(h); }
+        if(const auto h=GetClipboardData(CF_UNICODETEXT)) {
+            if(const auto p=static_cast<const wchar_t*>(GlobalLock(h))) { result=p; GlobalUnlock(h); }
         }
         CloseClipboard();
     }
@@ -74,8 +74,8 @@ std::wstring ReadText(HWND owner) {
 std::vector<std::filesystem::path> ReadFiles(HWND owner) {
     std::vector<std::filesystem::path> result;
     if(Open(owner)) {
-        if(auto h=static_cast<HDROP>(GetClipboardData(CF_HDROP))) {
-            auto n=DragQueryFileW(h,0xffffffff,nullptr,0);
+        if(const auto h=static_cast<HDROP>(GetClipboardData(CF_HDROP))) {
+            const auto n=DragQueryFileW(h,0xffffffff,nullptr,0);
             for(UINT i=0;i<n;i++) {
                 std::wstring p(DragQueryFileW(h,i,nullptr,0)+1,L'\0');
                 DragQueryFileW(h,i,p.data(),static_cast<UINT>(p.size())); p.pop_back();
@@ -89,14 +89,29 @@ std::vector<std::filesystem::path> ReadFiles(HWND owner) {
 }
 std::shared_ptr<const std::filesystem::path> ReadImage(HWND owner) {
     if(!Open(owner)) throw std::runtime_error("剪贴板被占用，请重试");
-    struct ClipboardLock { ~ClipboardLock() { CloseClipboard(); } } lock;
+    struct ClipboardLock {
+        ClipboardLock()=default;
+        ClipboardLock(const ClipboardLock&)=delete;
+        ClipboardLock& operator=(const ClipboardLock&)=delete;
+        ClipboardLock(ClipboardLock&&)=delete;
+        ClipboardLock& operator=(ClipboardLock&&)=delete;
+        ~ClipboardLock() { CloseClipboard(); }
+    } lock;
     // Read DIB pixels directly: synthesizing a device-dependent CF_BITMAP can fail.
     if(!IsClipboardFormatAvailable(CF_DIB)) return {};
-    auto memory=GetClipboardData(CF_DIB);
+    const auto memory=GetClipboardData(CF_DIB);
     if(!memory) throw std::runtime_error("无法读取剪贴板图片，请重新复制后重试");
-    auto header=static_cast<BITMAPINFOHEADER*>(GlobalLock(memory));
+    const auto header=static_cast<BITMAPINFOHEADER*>(GlobalLock(memory));
     if(!header) throw std::runtime_error("无法读取剪贴板图片");
-    struct BitmapLock { HGLOBAL memory; ~BitmapLock() { GlobalUnlock(memory); } } bitmapLock{memory};
+    struct BitmapLock {
+        HGLOBAL memory;
+        explicit BitmapLock(HGLOBAL value):memory(value) {}
+        BitmapLock(const BitmapLock&)=delete;
+        BitmapLock& operator=(const BitmapLock&)=delete;
+        BitmapLock(BitmapLock&&)=delete;
+        BitmapLock& operator=(BitmapLock&&)=delete;
+        ~BitmapLock() { GlobalUnlock(memory); }
+    } bitmapLock{memory};
     const auto length=GlobalSize(memory);
     const auto invalid=[] { throw std::runtime_error("剪贴板图片格式无效或不受支持，请重新复制"); };
     if(length<sizeof(BITMAPINFOHEADER) || header->biSize<sizeof(BITMAPINFOHEADER) || header->biSize>length) invalid();
@@ -114,10 +129,14 @@ std::shared_ptr<const std::filesystem::path> ReadImage(HWND owner) {
     struct Imaging {
         ULONG_PTR token=0;
         Imaging() {
-            Gdiplus::GdiplusStartupInput input;
+            const Gdiplus::GdiplusStartupInput input;
             if(Gdiplus::GdiplusStartup(&token,&input,nullptr)!=Gdiplus::Ok)
                 throw std::runtime_error("无法初始化图片编码器");
         }
+        Imaging(const Imaging&)=delete;
+        Imaging& operator=(const Imaging&)=delete;
+        Imaging(Imaging&&)=delete;
+        Imaging& operator=(Imaging&&)=delete;
         ~Imaging() { Gdiplus::GdiplusShutdown(token); }
     } imaging;
     Gdiplus::Bitmap image(reinterpret_cast<const BITMAPINFO*>(header),
@@ -126,7 +145,7 @@ std::shared_ptr<const std::filesystem::path> ReadImage(HWND owner) {
     UINT count=0,size=0;
     if(Gdiplus::GetImageEncodersSize(&count,&size)!=Gdiplus::Ok || !size)
         throw std::runtime_error("无法获取 PNG 编码器");
-    Bytes storage(size); auto encoders=reinterpret_cast<Gdiplus::ImageCodecInfo*>(storage.data());
+    Bytes storage(size); const auto encoders=reinterpret_cast<Gdiplus::ImageCodecInfo*>(storage.data());
     if(Gdiplus::GetImageEncoders(count,size,encoders)!=Gdiplus::Ok)
         throw std::runtime_error("无法获取 PNG 编码器");
     for(UINT i=0;i<count;++i) if(wcscmp(encoders[i].MimeType,L"image/png")==0) {

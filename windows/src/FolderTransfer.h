@@ -11,21 +11,21 @@ struct Entry { std::filesystem::path source; std::string relative; bool director
 struct Plan { std::string name; std::vector<Entry> entries; uint32_t files=0, directories=0; uint64_t bytes=0; };
 std::filesystem::path RelativePath(const std::string& text);
 std::wstring PathKey(const std::string& text);
-Plan Collect(const std::filesystem::path& root);
+Plan Collect(const std::filesystem::path& selected);
 void Recover(const std::filesystem::path& destination);
-Bytes EncodeHeader(const Header& header);
-Header DecodeHeader(const Bytes& bytes);
-Bytes FileHeader(const std::string& relative, uint64_t size);
+Bytes EncodeHeader(const Header& h);
+Header DecodeHeader(const Bytes& b);
+Bytes FileHeader(const std::string& name, uint64_t size);
 Bytes Reply(uint64_t id, bool accepted, const std::string& reason = {});
-uint64_t Id(const Bytes& bytes);
-bool Accepted(const Bytes& bytes);
-std::string Reason(const Bytes& bytes);
+uint64_t Id(const Bytes& b);
+bool Accepted(const Bytes& b);
+std::string Reason(const Bytes& b);
 // One unpublished transaction. Destruction removes only its own staging tree.
 class Receiver {
 public:
     Receiver(const std::filesystem::path& destination, const Header& header);
     ~Receiver();
-    void Consume(unsigned char type, const Bytes& bytes);
+    void Consume(unsigned char type, const Bytes& b);
     std::filesystem::path Commit();
     const Header& Metadata() const { return header_; }
     uint64_t Done() const { return done_; }
@@ -38,7 +38,7 @@ private:
     std::set<std::wstring> names_, directories_{L""};
     uint32_t filesDone_=0, dirsDone_=0;
     uint64_t done_=0;
-    void Register(const std::string& path, bool directory);
+    void Register(const std::string& text, bool directory);
 };
-void Send(Channel& channel, const Plan& plan, const std::function<void(uint64_t,uint64_t)>& progress);
+void Send(Channel& c, const Plan& plan, const std::function<void(uint64_t,uint64_t)>& progress);
 }

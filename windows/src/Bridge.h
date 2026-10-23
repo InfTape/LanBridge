@@ -49,7 +49,7 @@ private:
 struct Event {
     enum Kind { Connected, Disconnected, Text, File, Progress, Info, Error, Ack, Folder, FolderProgress } kind;
     std::wstring message;
-    std::filesystem::path path;
+    std::filesystem::path path{};
     uint64_t current = 0, total = 0;
 };
 class Server {
@@ -66,7 +66,7 @@ public:
     void Disconnect();
 private:
     void Run(uint16_t port, std::string code);
-    void Session(const std::shared_ptr<Channel>& channel);
+    void Session(const std::shared_ptr<Channel>& c);
     std::shared_ptr<Channel> Active() const;
     void Emit(Event e);
     std::filesystem::path directory_;

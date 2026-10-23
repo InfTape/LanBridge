@@ -1,8 +1,17 @@
 #pragma once
 
 #include <Windows.h>
+#include <limits>
 
 namespace ui {
+
+inline int DpiValue(UINT dpi) noexcept {
+    return dpi && dpi<=static_cast<UINT>((std::numeric_limits<int>::max)()) ? static_cast<int>(dpi) : 96;
+}
+
+inline int ScaleForDpi(int value, UINT dpi, int base=96) noexcept {
+    return MulDiv(value,DpiValue(dpi),base);
+}
 
 inline UINT UiDpi(HWND window) {
     using GetWindowDpi = UINT(WINAPI*)(HWND);
@@ -21,7 +30,7 @@ inline UINT UiDpi(HWND window) {
 // Keep application-owned text consistent, including shell-facing popup windows.
 inline HFONT CreateUiFont(UINT dpi) {
     LOGFONTW font{};
-    font.lfHeight = -MulDiv(9, dpi, 72);
+    font.lfHeight = -ScaleForDpi(9, dpi, 72);
     font.lfWeight = FW_NORMAL;
     font.lfCharSet = DEFAULT_CHARSET;
     font.lfOutPrecision = OUT_OUTLINE_PRECIS;

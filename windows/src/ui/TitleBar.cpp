@@ -48,20 +48,20 @@ void TitleBar::SetFont(HFONT font) {
 
 void TitleBar::Layout(int client_width) {
     const UINT dpi = UiDpi(parent_);
-    const int width = MulDiv(kButtonWidth, dpi, 96);
-    const int height = MulDiv(kHeight, dpi, 96);
+    const int width = ScaleForDpi(kButtonWidth, dpi, 96);
+    const int height = ScaleForDpi(kHeight, dpi, 96);
     for (std::size_t index = 0; index < buttons_.size(); ++index) {
         MoveWindow(buttons_[index], client_width - width * (3 - static_cast<int>(index)),
             0, width, height, TRUE);
     }
     SetWindowTextW(buttons_[1], IsZoomed(parent_) ? L"还原" : L"最大化");
-    RECT caption{0, 0, client_width, height};
+    const RECT caption{0, 0, client_width, height};
     InvalidateRect(parent_, &caption, FALSE);
 }
 
 void TitleBar::Paint(HDC dc) const {
     const UINT dpi = UiDpi(parent_);
-    const auto scale = [dpi](int value) { return MulDiv(value, dpi, 96); };
+    const auto scale = [dpi](int value) { return ScaleForDpi(value, dpi, 96); };
     RECT bounds{};
     GetClientRect(parent_, &bounds);
     bounds.bottom = scale(kHeight);
@@ -89,14 +89,14 @@ bool TitleBar::DrawButton(const DRAWITEMSTRUCT& item) const {
     const bool pressed = (item.itemState & ODS_SELECTED) != 0;
     const COLORREF background = hovered || pressed ?
         (close ? RGB(232, 17, 35) : GetSysColor(COLOR_BTNFACE)) : GetSysColor(COLOR_WINDOW);
-    HBRUSH brush = CreateSolidBrush(background);
+    const HBRUSH brush = CreateSolidBrush(background);
     FillRect(item.hDC, &item.rcItem, brush);
     DeleteObject(brush);
     const UINT dpi = UiDpi(parent_);
-    const int size = MulDiv(10, dpi, 96);
+    const int size = ScaleForDpi(10, dpi, 96);
     const int x = (item.rcItem.right - size) / 2;
     const int y = (item.rcItem.bottom - size) / 2;
-    HPEN pen = CreatePen(PS_SOLID, std::max(1, MulDiv(1, dpi, 96)),
+    const HPEN pen = CreatePen(PS_SOLID, std::max(1, ScaleForDpi(1, dpi, 96)),
         close && (hovered || pressed) ? RGB(255, 255, 255) : GetSysColor(COLOR_WINDOWTEXT));
     const auto old_pen = SelectObject(item.hDC, pen);
     const auto old_brush = SelectObject(item.hDC, GetStockObject(NULL_BRUSH));
@@ -109,10 +109,10 @@ bool TitleBar::DrawButton(const DRAWITEMSTRUCT& item) const {
         MoveToEx(item.hDC, x + size, y, nullptr);
         LineTo(item.hDC, x, y + size);
     } else if (IsZoomed(parent_)) {
-        const int offset = MulDiv(2, dpi, 96);
+        const int offset = ScaleForDpi(2, dpi, 96);
         Rectangle(item.hDC, x + offset, y, x + size, y + size - offset);
-        RECT front{x, y + offset, x + size - offset, y + size};
-        HBRUSH front_brush = CreateSolidBrush(background);
+        const RECT front{x, y + offset, x + size - offset, y + size};
+        const HBRUSH front_brush = CreateSolidBrush(background);
         FillRect(item.hDC, &front, front_brush);
         DeleteObject(front_brush);
         Rectangle(item.hDC, x, y + offset, x + size - offset, y + size);
@@ -124,7 +124,7 @@ bool TitleBar::DrawButton(const DRAWITEMSTRUCT& item) const {
     DeleteObject(pen);
     if (item.itemState & ODS_FOCUS) {
         RECT focus = item.rcItem;
-        InflateRect(&focus, -MulDiv(4, dpi, 96), -MulDiv(4, dpi, 96));
+        InflateRect(&focus, -ScaleForDpi(4, dpi, 96), -ScaleForDpi(4, dpi, 96));
         DrawFocusRect(item.hDC, &focus);
     }
     return true;
@@ -159,7 +159,7 @@ LRESULT TitleBar::HitTest(HWND window, LPARAM l_param) {
         const bool left = point.x < bounds.left + border;
         const bool right = point.x >= bounds.right - border;
         // The top frame now overlaps the painted caption; keep its resize grip slim.
-        const int top_grip = std::min(border, std::max(1, MulDiv(4, UiDpi(window), 96)));
+        const int top_grip = std::min(border, std::max(1, ScaleForDpi(4, UiDpi(window), 96)));
         const bool top = point.y < bounds.top + top_grip;
         const bool bottom = point.y >= bounds.bottom - border;
         if (top) return left ? HTTOPLEFT : right ? HTTOPRIGHT : HTTOP;
@@ -171,8 +171,8 @@ LRESULT TitleBar::HitTest(HWND window, LPARAM l_param) {
     RECT client{};
     GetClientRect(window, &client);
     const UINT dpi = UiDpi(window);
-    if (point.y < MulDiv(kHeight, dpi, 96) && point.x < client.right - MulDiv(3 * kButtonWidth, dpi, 96)) {
-        return point.x < MulDiv(36, dpi, 96) ? HTSYSMENU : HTCAPTION;
+    if (point.y < ScaleForDpi(kHeight, dpi, 96) && point.x < client.right - ScaleForDpi(3 * kButtonWidth, dpi, 96)) {
+        return point.x < ScaleForDpi(36, dpi, 96) ? HTSYSMENU : HTCAPTION;
     }
     return HTCLIENT;
 }
