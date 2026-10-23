@@ -1,4 +1,4 @@
-param([string]$SdkPath = '', [switch]$Test, [switch]$Release)
+﻿param([string]$SdkPath = '', [switch]$Test, [switch]$Release)
 $ErrorActionPreference = 'Stop'
 if ($SdkPath) {
     $resolvedSdk = (Resolve-Path -LiteralPath $SdkPath).Path.Replace('\', '/').Replace(':', '\:')

@@ -21,11 +21,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
-@Composable internal fun DeviceConnectionCard(state: TransferState, addComputer: () -> Unit, manageComputer: (String) -> Unit, connectComputer: suspend (String) -> Unit) {
-    ComputerHeaderPager(state, addComputer, manageComputer, connectComputer)
+@Composable internal fun DeviceConnectionCard(state: TransferState, events: kotlinx.coroutines.flow.SharedFlow<TransferEvent>, addComputer: () -> Unit, manageComputer: (String) -> Unit, connectComputer: suspend (String) -> Unit) {
+    ComputerHeaderPager(state, events, addComputer, manageComputer, connectComputer)
 }
 
-@Composable private fun ComputerHeaderPager(state: TransferState, addComputer: () -> Unit, manageComputer: (String) -> Unit, connectComputer: suspend (String) -> Unit) {
+@Composable private fun ComputerHeaderPager(state: TransferState, events: kotlinx.coroutines.flow.SharedFlow<TransferEvent>, addComputer: () -> Unit, manageComputer: (String) -> Unit, connectComputer: suspend (String) -> Unit) {
     val green = if(isSystemInDarkTheme()) Color(0xFF67DD94) else Color(0xFF00A847)
     val computers = remember(state.computers, state.defaultComputerId) {
         state.computers.filter { it.id == state.defaultComputerId } + state.computers.filterNot { it.id == state.defaultComputerId }
@@ -38,8 +38,12 @@ import kotlinx.coroutines.launch
         var page by rememberSaveable { mutableIntStateOf(selected) }
         val scope = rememberCoroutineScope()
         var requestingConnection by remember { mutableStateOf(false) }
-        LaunchedEffect(selected) {
-            page = selected
+        LaunchedEffect(Unit) {
+            events.collect { event ->
+                if(event is TransferEvent.ComputerSelected) {
+                    page = selected
+                }
+            }
         }
         val viewedComputer = computers.getOrNull(page)
         val viewedCurrent = viewedComputer != null && viewedComputer.id == state.selectedComputerId

@@ -15,7 +15,7 @@ data class ReceiveProgress(
     val savedUri: String? = null,
     val error: String = "",
     val detail: String = ""
-) {
+) : java.io.Serializable {
     init { require(total >= 0 && current in 0..total) }
     val active: Boolean get() = phase == ReceivePhase.RECEIVING || phase == ReceivePhase.SAVING
     val fraction: Float get() = if(total == 0L) 1f else (current.toDouble() / total).toFloat().coerceIn(0f, 1f)

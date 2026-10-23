@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -26,6 +29,13 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.UUID
 
 class BridgeApplication : Application() { val engine by lazy { TransferEngine(this) } }
+sealed interface TransferEvent {
+    data class ReceiveNotice(val progress: ReceiveProgress) : TransferEvent
+    data class SendNotice(val progress: SendProgress) : TransferEvent
+    data class ReceiptArrived(val id: String) : TransferEvent
+    data object ComputerSelected : TransferEvent
+    data object Connected : TransferEvent
+}
 data class Received(val name: String, val text: String? = null, val uri: Uri? = null, val size: Long = 0, val directory: Boolean = false, val id: String = UUID.randomUUID().toString(), val receivedAt: Long = System.currentTimeMillis(), val highlight: Boolean = true)
 data class TransferState(
     val connected: Boolean = false, val connecting: Boolean = false, val remembered: Boolean = false,
@@ -47,6 +57,8 @@ class TransferEngine(private val app: Application) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutable = MutableStateFlow(TransferState())
     val state = mutable.asStateFlow()
+    private val eventFlow = MutableSharedFlow<TransferEvent>(extraBufferCapacity = 64)
+    val events: SharedFlow<TransferEvent> = eventFlow.asSharedFlow()
     private val historyLock = Any()
     private val history = ReceivedHistory(File(app.noBackupFilesDir, "received-history/history.bin"))
     private val generation = AtomicLong()
@@ -123,11 +135,13 @@ class TransferEngine(private val app: Application) {
         trustedPairing?.let { connectPair(it, automatic = true) }
     }
     private fun showBindings(book: ComputerBindings) {
+        val changed = bindings.selectedId != book.selectedId
         bindings = book; trustedPairing = book.current?.pairing
         mutable.update { it.copy(remembered = book.current != null,
             computers = book.computers.map { computer -> computer.display() }, selectedComputerId = book.selectedId, defaultComputerId = book.defaultId,
             deviceName = book.current?.name.orEmpty(), peer = book.current?.pairing?.host.orEmpty(),
             deviceRevision = if(it.selectedComputerId != book.selectedId) it.deviceRevision + 1 else it.deviceRevision) }
+        if(changed) eventFlow.tryEmit(TransferEvent.ComputerSelected)
     }
     private fun deviceSwitchError(): String? = DeviceSwitchGuard.reason(state.value.sending, state.value.incoming?.active == true, sharedQueue.pending.value)
     @Synchronized fun switchComputer(id: String): String? {
@@ -251,6 +265,7 @@ class TransferEngine(private val app: Application) {
                         app.getSharedPreferences("pairing", 0).edit().putString("address", "${pairing.host}:${pairing.port}").apply()
                         mayRetry = true; failures = 0
                         mutable.update { it.copy(connected = true, connecting = false, peer = pairing.host, status = "已连接 Windows · 已记住绑定") }
+                        eventFlow.tryEmit(TransferEvent.Connected)
                         heartbeat = scope.launch { while(isActive && generation.get() == id) { delay(15000); try { active.send(7) } catch(_: Exception) { active.close(); break } } }
                     }
                     receive(active)
@@ -330,7 +345,13 @@ class TransferEngine(private val app: Application) {
         updateSend(channel) { it.copy(phase = SendPhase.CONFIRMING) }
     }
     private fun failActiveSend(message: String) {
-        mutable.update { state -> state.copy(outgoing = state.outgoing?.takeIf { it.active }?.copy(phase = SendPhase.FAILED, error = message) ?: state.outgoing) }
+        var failed: SendProgress? = null
+        mutable.update { state -> state.copy(outgoing = state.outgoing?.takeIf { it.active }?.let {
+            val next = it.copy(phase = SendPhase.FAILED, error = message)
+            failed = next
+            next
+        } ?: state.outgoing) }
+        failed?.let { eventFlow.tryEmit(TransferEvent.SendNotice(it)) }
     }
     private fun beginReceive(channel: Wire, name: String, size: Long, directory: Boolean = false): String {
         val destination = if(directory) folders.destinationName() ?: "已授权目录" else "下载/LanBridge"
@@ -338,11 +359,22 @@ class TransferEngine(private val app: Application) {
             if(wire !== channel) throw CancellationException("连接已断开")
             val receipt = ReceiveProgress(name, size, destination, directory)
             mutable.update { it.copy(incoming = receipt) }
+            eventFlow.tryEmit(TransferEvent.ReceiveNotice(receipt))
             receipt.id
         }
     }
     private fun updateReceive(id: String?, update: (ReceiveProgress) -> ReceiveProgress) {
-        if(id != null) mutable.update { state -> state.copy(incoming = state.incoming?.let { if(it.id == id) update(it) else it }) }
+        if(id != null) {
+            var finished: ReceiveProgress? = null
+            mutable.update { state -> state.copy(incoming = state.incoming?.let {
+                if(it.id == id) {
+                    val next = update(it)
+                    if(!next.active) finished = next
+                    next
+                } else it
+            }) }
+            finished?.let { eventFlow.tryEmit(TransferEvent.ReceiveNotice(it)) }
+        }
     }
     private fun savingReceive(id: String?) = synchronized(this) {
         // Fence publication against a user disconnect. Once saving starts, its
@@ -355,9 +387,15 @@ class TransferEngine(private val app: Application) {
     }
     private fun failReceive(id: String?, summary: String, detail: String) = updateReceive(id) { it.failed(summary, detail) }
     private fun interruptReceive() {
+        var failed: ReceiveProgress? = null
         mutable.update { state -> state.copy(incoming = state.incoming?.let {
-            if(it.phase == ReceivePhase.RECEIVING) it.failed("连接中断，文件未完整保存", "连接已断开，接收未完成。请重新连接后让电脑再次发送。") else it
+            if(it.phase == ReceivePhase.RECEIVING) {
+                val next = it.failed("连接中断，文件未完整保存", "连接已断开，接收未完成。请重新连接后让电脑再次发送。")
+                failed = next
+                next
+            } else it
         }) }
+        failed?.let { eventFlow.tryEmit(TransferEvent.ReceiveNotice(it)) }
     }
     private fun receive(channel: Wire) {
         var pending: PendingFile? = null
@@ -470,15 +508,23 @@ class TransferEngine(private val app: Application) {
         if(state.value.sending) { if(!quiet) report("当前发送尚未完成"); return@synchronized null }
         val channel = wire ?: return@synchronized null
         val id = generation.get()
-        mutable.update { it.copy(sending = true, outgoing = SendProgress()) }
+        val initial = SendProgress()
+        mutable.update { it.copy(sending = true, outgoing = initial) }
+        eventFlow.tryEmit(TransferEvent.SendNotice(initial))
         val job = scope.launch(start = CoroutineStart.LAZY) {
             sendMutex.withLock {
                 try {
                     task(channel)
                     currentCoroutineContext().ensureActive()
+                    var succeeded: SendProgress? = null
                     if(generation.get() == id) mutable.update { state -> state.copy(
-                        outgoing = state.outgoing?.takeIf { it.active }?.copy(phase = SendPhase.SUCCEEDED) ?: state.outgoing
+                        outgoing = state.outgoing?.takeIf { it.active }?.let {
+                            val next = it.copy(phase = SendPhase.SUCCEEDED)
+                            succeeded = next
+                            next
+                        } ?: state.outgoing
                     ) }
+                    succeeded?.let { eventFlow.tryEmit(TransferEvent.SendNotice(it)) }
                 }
                 catch(e: Exception) {
                     if(generation.get() == id) {
@@ -650,6 +696,7 @@ class TransferEngine(private val app: Application) {
         val record = ReceivedRecord(item.name.ifBlank { if(item.directory) "文件夹" else "文件" }, item.receivedAt,
             item.text, item.uri?.toString(), item.size, item.directory, item.id)
         publishHistory(history.add(record), status)
+        eventFlow.tryEmit(TransferEvent.ReceiptArrived(record.id))
     }
     fun refreshHistory() { scope.launch { synchronized(historyLock) { publishHistory(history.refresh()) } } }
     fun clearHistory() { scope.launch { synchronized(historyLock) { publishHistory(history.clear()) } } }

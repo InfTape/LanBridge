@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -98,8 +99,8 @@ class MainActivity : ComponentActivity() {
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showManualConnection by rememberSaveable { mutableStateOf(false) }
     var showAddComputer by rememberSaveable { mutableStateOf(false) }
-    var manualError by remember { mutableStateOf<String?>(null) }
-    var deviceActionError by remember { mutableStateOf<String?>(null) }
+    var manualError by rememberSaveable { mutableStateOf<String?>(null) }
+    var deviceActionError by rememberSaveable { mutableStateOf<String?>(null) }
     var managingDevices by rememberSaveable { mutableStateOf(false) }
     var managedIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
     val selectingDevices = managedIds.isNotEmpty()
@@ -107,7 +108,7 @@ class MainActivity : ComponentActivity() {
     val detailComputer = state.computers.find { it.id == deviceDetailsId }
     var deviceSettingsMenu by remember(managingDevices, managedIds) { mutableStateOf(false) }
     var managementBusy by remember { mutableStateOf(false) }
-    var removeTargets by remember { mutableStateOf<List<String>?>(null) }
+    var removeTargets by rememberSaveable { mutableStateOf<List<String>?>(null) }
     val chosenComputers = state.computers.filter { it.id in managedIds }
     val singleComputer = chosenComputers.singleOrNull()
     val cancelDefault = singleComputer != null && singleComputer.id == state.defaultComputerId
@@ -121,30 +122,48 @@ class MainActivity : ComponentActivity() {
     var renameTarget by rememberSaveable { mutableStateOf<String?>(null) }
     var renameError by remember(state.deviceRevision) { mutableStateOf<String?>(null) }
     var renameSaving by remember(state.deviceRevision) { mutableStateOf(false) }
-    LaunchedEffect(state.selectedComputerId) {
-        address = engine.savedAddress(); code = ""; showManualConnection = false; showAddComputer = false
-    }
-    LaunchedEffect(state.connected, state.peer) {
-        if(state.connected) { address = engine.savedAddress(); code = ""; showManualConnection = false }
-    }
+    var flashingReceiptIds by remember { mutableStateOf(setOf<String>()) }
+    var receiveDetails by rememberSaveable { mutableStateOf<ReceiveProgress?>(null) }
     val listState = rememberLazyListState()
     val connectionScroll = rememberScrollState()
     val scope = rememberCoroutineScope()
     val sendSnackbar = remember { SnackbarHostState() }
     val receiveSnackbar = remember { SnackbarHostState() }
-    var receiveDetails by remember { mutableStateOf<ReceiveProgress?>(null) }
-    val outgoing = state.outgoing
-    // Keep one indefinite snackbar alive while bytes change. Only a new task or
-    // terminal result replaces it, so progress updates never restart host animations.
-    val sendNotice = outgoing?.let { if(it.active) "active" else it.phase.name }
-    LaunchedEffect(outgoing?.id, sendNotice) {
-        outgoing?.let { sendSnackbar.showSnackbar(SendSnackbarVisuals(it)) }
-    }
-    val incoming = state.incoming
-    val receiveNotice = incoming?.let { if(it.active) "active" else it.phase.name }
-    LaunchedEffect(incoming?.id, receiveNotice) {
-        if(incoming != null && receiveSnackbar.showSnackbar(ReceiveSnackbarVisuals(incoming)) == SnackbarResult.ActionPerformed) {
-            if(incoming.phase == ReceivePhase.FAILED) receiveDetails = incoming
+    LaunchedEffect(Unit) {
+        var receiveJob: Job? = null
+        var sendJob: Job? = null
+        state.incoming?.takeIf { it.active }?.let { active ->
+            receiveJob = launch { receiveSnackbar.showSnackbar(ReceiveSnackbarVisuals(active)) }
+        }
+        state.outgoing?.takeIf { it.active }?.let { active ->
+            sendJob = launch { sendSnackbar.showSnackbar(SendSnackbarVisuals(active)) }
+        }
+        engine.events.collect { event ->
+            when(event) {
+                is TransferEvent.ReceiveNotice -> {
+                    receiveJob?.cancel()
+                    receiveJob = launch {
+                        if(receiveSnackbar.showSnackbar(ReceiveSnackbarVisuals(event.progress)) == SnackbarResult.ActionPerformed) {
+                            if(event.progress.phase == ReceivePhase.FAILED) receiveDetails = event.progress
+                        }
+                    }
+                }
+                is TransferEvent.SendNotice -> {
+                    sendJob?.cancel()
+                    sendJob = launch {
+                        sendSnackbar.showSnackbar(SendSnackbarVisuals(event.progress))
+                    }
+                }
+                is TransferEvent.ReceiptArrived -> {
+                    flashingReceiptIds = flashingReceiptIds + event.id
+                }
+                TransferEvent.ComputerSelected -> {
+                    address = engine.savedAddress(); code = ""; showManualConnection = false; showAddComputer = false
+                }
+                TransferEvent.Connected -> {
+                    address = engine.savedAddress(); code = ""; showManualConnection = false
+                }
+            }
         }
     }
     receiveDetails?.let { receipt ->
@@ -407,7 +426,7 @@ class MainActivity : ComponentActivity() {
                     chooseFolder = { folderChooser.launch(null) })
             }
             val connectionPanel: @Composable () -> Unit = {
-                DeviceConnectionCard(state,
+                DeviceConnectionCard(state, engine.events,
                     addComputer = { showAddComputer = true },
                     manageComputer = { _ ->
                         managedIds = emptyList(); managingDevices = true
@@ -456,7 +475,11 @@ class MainActivity : ComponentActivity() {
                     LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         item { sendPanel() }
                         item { ReceivedHeading(state, engine) }
-                        itemsIndexed(state.received, key = { _, item -> item.id }) { _, item -> ReceivedCard(item, engine) }
+                        itemsIndexed(state.received, key = { _, item -> item.id }) { _, item ->
+                            ReceivedCard(item, engine, item.id in flashingReceiptIds) {
+                                flashingReceiptIds = flashingReceiptIds - item.id
+                            }
+                        }
                         item { Spacer(Modifier.height(20.dp)) }
                     }
                 }
@@ -465,7 +488,11 @@ class MainActivity : ComponentActivity() {
                     item(key = "connection") { connectionPanel() }
                     item { sendPanel() }
                     item { ReceivedHeading(state, engine) }
-                    itemsIndexed(state.received, key = { _, item -> item.id }) { _, item -> ReceivedCard(item, engine) }
+                    itemsIndexed(state.received, key = { _, item -> item.id }) { _, item ->
+                        ReceivedCard(item, engine, item.id in flashingReceiptIds) {
+                            flashingReceiptIds = flashingReceiptIds - item.id
+                        }
+                    }
                     item { Spacer(Modifier.height(12.dp)) }
                 }
             }
@@ -580,7 +607,7 @@ private enum class SheetAccent { BLUE, GREEN, ORANGE }
         else if(state.received.isEmpty() && state.historyError == null) ReceivedEmptyState()
     }
 }
-@Composable private fun ReceivedCard(item: Received, engine: TransferEngine) {
+@Composable private fun ReceivedCard(item: Received, engine: TransferEngine, flashing: Boolean, onFlashed: () -> Unit) {
     val context = LocalContext.current
     var menuExpanded by remember { mutableStateOf(false) }
     var showText by rememberSaveable(item.id) { mutableStateOf(false) }
@@ -607,15 +634,15 @@ private enum class SheetAccent { BLUE, GREEN, ORANGE }
         dismissButton = { TextButton(onClick = { showText = false }) { Text("关闭") } }
     )
     val flash = remember(item.id) { Animatable(0f) }
-    var hasFlashed by rememberSaveable(item.id) { mutableStateOf(false) }
-    LaunchedEffect(item.id) {
-        if(item.highlight && !hasFlashed) {
-            // Stable receipt keys keep older cards from flashing again when a
-            // new receipt is inserted, the list scrolls, or the screen recreates.
-            hasFlashed = true
-            repeat(3) {
-                flash.animateTo(1f, tween(300))
-                flash.animateTo(0f, tween(300))
+    LaunchedEffect(flashing) {
+        if(flashing) {
+            try {
+                repeat(3) {
+                    flash.animateTo(1f, tween(300))
+                    flash.animateTo(0f, tween(300))
+                }
+            } finally {
+                onFlashed()
             }
         }
     }
