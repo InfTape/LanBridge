@@ -39,6 +39,13 @@ target_link_options(LanBridge PRIVATE /MANIFEST:EMBED /MANIFESTINPUT:${CMAKE_CUR
 set_property(TARGET LanBridge APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/app.manifest)
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(CryptoInitializationIntegration tests/CryptoInitializationIntegration.cpp)
+  # This executable compiles the private crypto implementations with fault
+  # injection; bridge supplies the same include, definition and system libraries.
+  target_link_libraries(CryptoInitializationIntegration PRIVATE bridge)
+  target_compile_options(CryptoInitializationIntegration PRIVATE /utf-8 /EHsc)
+  add_test(NAME CryptoInitializationIntegration COMMAND CryptoInitializationIntegration)
+  set_tests_properties(CryptoInitializationIntegration PROPERTIES TIMEOUT 45)
   add_executable(FolderIntegration tests/FolderIntegration.cpp)
   target_link_libraries(FolderIntegration PRIVATE bridge)
   target_compile_options(FolderIntegration PRIVATE /utf-8 /EHsc)
