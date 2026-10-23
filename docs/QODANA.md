@@ -19,4 +19,8 @@ The Windows job generates `windows/build/qodana/LanBridge.sln` with Visual Studi
 
 The Android scan uses the existing Gradle wrapper and AGP versions; no app dependency, SDK target, or signing configuration is downgraded for Qodana. Release signing keys are not available to these jobs.
 
+Android analysis intentionally uses a fresh Qodana cache on every run (`use-caches: false`). A restored IDE model can refer to an Android SDK installed in a previous disposable container, skip Gradle sync, and produce unresolved Android/Java types in the next container. Fresh import lets Gradle resolve the SDK and dependencies in the actual scan container. Android cache/results directories are explicitly separate from the Windows job. This trades some scan time for reliable project import; do not restore model caches until SDK provisioning and model reuse have been verified together.
+
+After scanning, `scripts/validate-qodana-report.py` checks the full SARIF execution status and embedded `qodana.sanity.results`. Missing/incomplete reports and sanity problems fail the job even when the linter itself exits successfully. Ordinary application findings do not fail this integrity check and are not suppressed. Reports are still uploaded by the scan action before this check, so a failed analysis can be diagnosed from its artifact. Run the guard's regression tests with `python -m unittest discover -s scripts -p test_validate_qodana_report.py`.
+
 The current Qodana Cloud organization was configured with an Ultimate Plus trial ending 20 November 2026. Continued paid features depend on the organization's active subscription.

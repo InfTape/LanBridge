@@ -32,6 +32,11 @@ jobs:
         uses: JetBrains/qodana-action@3e8d76ff0e0241618abd808682f426afe84bab3f # v2026.2.2
         with:
           args: --project-dir android
+          # A restored IDE model can reference an SDK installed only in a previous
+          # container and skip the Gradle sync that installs it in this container.
+          use-caches: false
+          cache-dir: ${{ runner.temp }}/qodana-android/caches
+          results-dir: ${{ runner.temp }}/qodana-android/results
           pr-mode: false
           post-pr-comment: false
           push-fixes: none
@@ -40,3 +45,5 @@ jobs:
         env:
           QODANA_TOKEN: ${{ secrets.QODANA_TOKEN_1022648571 }}
           QODANA_ENDPOINT: https://qodana.cloud
+      - name: Check Android analysis integrity
+        run: python3 scripts/validate-qodana-report.py "${{ runner.temp }}/qodana-android/results/qodana.sarif.json"
