@@ -18,6 +18,12 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import java.util.concurrent.ConcurrentHashMap
 
+internal fun discoveryBroadcastAddress(address: InetAddress, prefixLength: Int): InetAddress? {
+    if(address !is Inet4Address || prefixLength !in 1..30) return null
+    val host = ByteBuffer.wrap(address.address).int
+    return InetAddress.getByAddress(ByteBuffer.allocate(4).putInt(host or (-1 ushr prefixLength)).array())
+}
+
 object DiscoveryProtocol {
     fun request(nonce: ByteArray): ByteArray { require(nonce.size == 16); return "LBD1".toByteArray() + nonce }
     fun verify(reply: ByteArray, nonce: ByteArray, host: String, code: String): Pairing? {
@@ -46,14 +52,12 @@ class PairingDiscovery(private val context: Context) {
     }
     fun find(pair: Pairing): Pairing? {
         val network = wifi()
+        // The destination describes the Wi-Fi LAN even when VPN policy requires the default socket route.
+        val broadcasts = manager.getLinkProperties(network)?.linkAddresses.orEmpty().mapNotNull { link ->
+            discoveryBroadcastAddress(link.address, link.prefixLength)
+        }.ifEmpty { listOf(InetAddress.getByName("255.255.255.255")) }
         val routed = routeSocket(::DatagramSocket, network?.let { net -> { socket: DatagramSocket -> net.bindSocket(socket) } }, ::bindingRejected)
         routed.socket.use { socket ->
-            val broadcasts = manager.getLinkProperties(if(routed.preferredNetwork) network else manager.activeNetwork)?.linkAddresses.orEmpty().mapNotNull { link ->
-                val address = link.address as? Inet4Address ?: return@mapNotNull null
-                if(link.prefixLength !in 1..30) return@mapNotNull null
-                val host = ByteBuffer.wrap(address.address).int
-                InetAddress.getByAddress(ByteBuffer.allocate(4).putInt(host or (-1 ushr link.prefixLength)).array())
-            }.ifEmpty { listOf(InetAddress.getByName("255.255.255.255")) }
             val nonce = ByteArray(16).also(SecureRandom()::nextBytes); val request = DiscoveryProtocol.request(nonce)
             socket.broadcast = true; socket.soTimeout = 250
             for(address in broadcasts) socket.send(DatagramPacket(request, request.size, address, 42832))
